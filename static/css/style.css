@@ -1,0 +1,72 @@
+body {
+    background-color: #f4f6f9;
+}
+
+.card {
+    border: 0;
+}
+
+.details-pre {
+    white-space: pre-wrap;
+    font-family: inherit;
+    background: #f8f9fa;
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+}
+
+.token-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #eef2f7;
+    border-radius: 999px;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.825rem;
+}
+
+.kanban-board {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+
+.kanban-column {
+    background: #e9edf3;
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+    min-height: 240px;
+}
+
+.kanban-column-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.kanban-list {
+    min-height: 180px;
+    display: grid;
+    gap: 0.6rem;
+}
+
+.kanban-card {
+    background: #fff;
+    border: 1px solid #dde4ee;
+    border-radius: 0.5rem;
+    padding: 0.6rem;
+    box-shadow: 0 2px 8px rgba(23, 31, 56, 0.05);
+}
+
+.kanban-card-title {
+    color: #0d6efd;
+    text-decoration: none;
+    font-weight: 600;
+    display: block;
+    margin-bottom: 0.35rem;
+}
+
+.sortable-ghost {
+    opacity: 0.4;
+}

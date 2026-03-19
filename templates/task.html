@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Задача #{{ task.id }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Задача #{{ task.id }}</h1>
+    <div class="d-flex gap-2">
+        {% if can_archive %}
+        <form method="post" action="{{ url_for('archive_task', task_id=task.id) }}" onsubmit="return confirm('Переместить задачу в архив?');">
+            <button class="btn btn-outline-warning">В архив</button>
+        </form>
+        {% endif %}
+
+        {% if can_restore %}
+        <form method="post" action="{{ url_for('restore_task', task_id=task.id) }}">
+            <button class="btn btn-outline-success">Восстановить</button>
+        </form>
+        {% endif %}
+
+        <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Назад</a>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                {% if can_edit %}
+                <h2 class="h5 mb-3">Редактирование</h2>
+                <form method="post" action="{{ url_for('task_update', task_id=task.id) }}" class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label">Тема</label>
+                        <input class="form-control" name="theme" maxlength="255" required value="{{ task.theme }}">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Содержимое</label>
+                        <textarea class="form-control" name="content" rows="6" required>{{ task.content }}</textarea>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Клиент</label>
+                        <select class="form-select" name="client_id" required>
+                            {% for client in clients %}
+                            <option value="{{ client.id }}" {% if task.client_id == client.id %}selected{% endif %}>{{ client.username }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Срок</label>
+                        <input class="form-control" type="date" name="due_date" required value="{{ task.due_date }}">
+                    </div>
+                    <div class="col-12">
+                        <button class="btn btn-primary" type="submit">Сохранить</button>
+                    </div>
+                </form>
+                {% else %}
+                <h2 class="h5 mb-3">Детали задачи</h2>
+                <dl class="row mb-0">
+                    <dt class="col-sm-3">Тема</dt>
+                    <dd class="col-sm-9">{{ task.theme }}</dd>
+                    <dt class="col-sm-3">Содержимое</dt>
+                    <dd class="col-sm-9"><pre class="mb-0 details-pre">{{ task.content }}</pre></dd>
+                    <dt class="col-sm-3">Клиент</dt>
+                    <dd class="col-sm-9">{{ task.client.username }}</dd>
+                    <dt class="col-sm-3">Срок</dt>
+                    <dd class="col-sm-9">{{ task.due_date }}</dd>
+                </dl>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5 mb-3">История статусов</h2>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr>
+                                <th>Когда</th>
+                                <th>Кто</th>
+                                <th>Было</th>
+                                <th>Стало</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in task.history %}
+                            <tr>
+                                <td>{{ item.changed_at | datetime }}</td>
+                                <td>{{ item.changed_by.username if item.changed_by else 'API/System' }}</td>
+                                <td>{{ item.old_status.name if item.old_status else '—' }}</td>
+                                <td>{{ item.new_status.name }}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="4" class="text-center text-muted">История пока пустая</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h6">Состояние</h2>
+                <p class="mb-2"><span class="badge text-bg-secondary">{{ task.status.name }}</span></p>
+                <p class="small text-muted mb-0">Создал: {{ task.created_by.username if task.created_by else '—' }}</p>
+                <p class="small text-muted mb-0">Создана: {{ task.created_at | datetime }}</p>
+                <p class="small text-muted mb-0">Обновлена: {{ task.updated_at | datetime }}</p>
+                {% if task.archived %}
+                <p class="small text-muted mb-0">Архивирована: {{ task.archived_at | datetime }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if can_change_status %}
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h6">Сменить статус</h2>
+                <form method="post" action="{{ url_for('task_change_status', task_id=task.id) }}" class="d-grid gap-2">
+                    <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
+                    <select class="form-select" name="status_id" required>
+                        {% for status in statuses %}
+                        <option value="{{ status.id }}" {% if status.id == task.status_id %}selected{% endif %}>{{ status.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <button class="btn btn-outline-primary" type="submit">Обновить статус</button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Архив задач{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Архив задач</h1>
+    <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">К активным задачам</a>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <form class="row g-3" method="get" action="{{ url_for('archive') }}">
+            <div class="col-md-3">
+                <label class="form-label">Статус</label>
+                <select class="form-select" name="status_id">
+                    <option value="">Все</option>
+                    {% for status in statuses %}
+                    <option value="{{ status.id }}" {% if status_id == status.id %}selected{% endif %}>{{ status.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3 d-flex align-items-end gap-2">
+                <button class="btn btn-outline-primary" type="submit">Фильтровать</button>
+                <a class="btn btn-outline-secondary" href="{{ url_for('archive') }}">Сброс</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Тема</th>
+                    <th>Клиент</th>
+                    <th>Статус</th>
+                    <th>Архивирована</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for task in tasks %}
+                <tr>
+                    <td>{{ task.id }}</td>
+                    <td><a href="{{ url_for('task_detail', task_id=task.id) }}" class="text-decoration-none">{{ task.theme }}</a></td>
+                    <td>{{ task.client.username }}</td>
+                    <td><span class="badge text-bg-secondary">{{ task.status.name }}</span></td>
+                    <td>{{ task.archived_at | datetime }}</td>
+                    <td>
+                        {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
+                        <form method="post" action="{{ url_for('restore_task', task_id=task.id) }}">
+                            <button class="btn btn-sm btn-outline-success">Восстановить</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-4">Архив пуст</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

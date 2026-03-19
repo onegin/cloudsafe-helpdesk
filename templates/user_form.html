@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{% if user %}Редактирование пользователя{% else %}Новый пользователь{% endif %}{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h1 class="h4 mb-3">{% if user %}Редактирование пользователя #{{ user.id }}{% else %}Создание пользователя{% endif %}</h1>
+                <form method="post" class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Логин</label>
+                        <input class="form-control" name="username" required value="{{ form_data.get('username', '') }}">
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">Роль</label>
+                        <select class="form-select" name="role" required>
+                            <option value="admin" {% if form_data.get('role') == 'admin' %}selected{% endif %}>Администратор</option>
+                            <option value="operator" {% if form_data.get('role') == 'operator' %}selected{% endif %}>Оператор</option>
+                            <option value="client" {% if form_data.get('role') == 'client' %}selected{% endif %}>Клиент</option>
+                        </select>
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label">Пароль {% if user %}(оставьте пустым, чтобы не менять){% endif %}</label>
+                        <input class="form-control" type="password" name="password" {% if not user %}required{% endif %}>
+                    </div>
+
+                    <div class="col-12 d-flex flex-wrap gap-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="active" name="active" {% if form_data.get('active', 'on') %}checked{% endif %}>
+                            <label class="form-check-label" for="active">Пользователь активен</label>
+                        </div>
+
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="must_change_password" name="must_change_password" {% if form_data.get('must_change_password') %}checked{% endif %}>
+                            <label class="form-check-label" for="must_change_password">Запросить смену пароля при входе</label>
+                        </div>
+
+                        {% if not user %}
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="create_token" name="create_token" checked>
+                            <label class="form-check-label" for="create_token">Для клиента сразу создать API токен</label>
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <div class="col-12 d-flex gap-2">
+                        <button class="btn btn-primary" type="submit">Сохранить</button>
+                        <a class="btn btn-outline-secondary" href="{{ url_for('users') }}">Отмена</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

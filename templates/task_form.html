@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Создание задачи{% endblock %}
+{% block content %}
+<div class="row">
+    <div class="col-lg-9">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h1 class="h4 mb-3">Создание новой задачи</h1>
+                <form method="post" class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label">Тема</label>
+                        <input class="form-control" name="theme" maxlength="255" required value="{{ form_data.get('theme', '') }}">
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label">Содержимое</label>
+                        <textarea class="form-control" rows="6" name="content" required>{{ form_data.get('content', '') }}</textarea>
+                    </div>
+
+                    {% if current_user.role == Roles.CLIENT %}
+                    <div class="col-md-6">
+                        <label class="form-label">Клиент</label>
+                        <input class="form-control" value="{{ current_user.username }}" disabled>
+                    </div>
+                    {% else %}
+                    <div class="col-md-6">
+                        <label class="form-label">Клиент</label>
+                        <select class="form-select" name="client_id" required>
+                            <option value="">Выберите клиента</option>
+                            {% for client in clients %}
+                            <option value="{{ client.id }}" {% if form_data.get('client_id')|int == client.id %}selected{% endif %}>{{ client.username }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% endif %}
+
+                    <div class="col-md-6">
+                        <label class="form-label">Срок выполнения</label>
+                        <input class="form-control" type="date" name="due_date" required value="{{ form_data.get('due_date', '') }}">
+                    </div>
+
+                    <div class="col-12 d-flex gap-2">
+                        <button class="btn btn-primary" type="submit">Создать задачу</button>
+                        <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Отмена</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

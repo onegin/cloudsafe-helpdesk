@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Ошибка {{ code }}{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+        <div class="card shadow-sm text-center">
+            <div class="card-body py-5">
+                <h1 class="display-6">{{ code }}</h1>
+                <p class="lead">{{ message }}</p>
+                <a class="btn btn-primary" href="{{ url_for('index') }}">Вернуться к задачам</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

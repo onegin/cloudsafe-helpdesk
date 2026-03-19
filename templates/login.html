@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Вход | CloudSafe Helpdesk{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-5 col-lg-4">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h1 class="h4 mb-3">Вход в систему</h1>
+                <form method="post">
+                    <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+                    <div class="mb-3">
+                        <label class="form-label">Логин</label>
+                        <input class="form-control" name="username" required autofocus>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Пароль</label>
+                        <input class="form-control" type="password" name="password" required>
+                    </div>
+                    <button class="btn btn-primary w-100" type="submit">Войти</button>
+                </form>
+            </div>
+        </div>
+        <div class="text-muted small mt-3">
+            По умолчанию: <code>admin / admin</code>
+        </div>
+    </div>
+</div>
+{% endblock %}
