@@ -47,6 +47,23 @@
                         <label class="form-label">Срок</label>
                         <input class="form-control" type="date" name="due_date" required value="{{ task.due_date }}">
                     </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Приоритет</label>
+                        <select class="form-select" name="priority">
+                            {% for value, label in priorities %}
+                            <option value="{{ value }}" {% if task.priority == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Ответственный оператор</label>
+                        <select class="form-select" name="assigned_to_id">
+                            <option value="">Не назначен</option>
+                            {% for operator in assignees %}
+                            <option value="{{ operator.id }}" {% if task.assigned_to and task.assigned_to.id == operator.id %}selected{% endif %}>{{ operator.username }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                     <div class="col-12">
                         <button class="btn btn-primary" type="submit">Сохранить</button>
                     </div>
@@ -62,8 +79,75 @@
                     <dd class="col-sm-9">{{ task.client.username }}</dd>
                     <dt class="col-sm-3">Срок</dt>
                     <dd class="col-sm-9">{{ task.due_date }}</dd>
+                    <dt class="col-sm-3">Приоритет</dt>
+                    <dd class="col-sm-9">{{ task.priority_label }}</dd>
+                    <dt class="col-sm-3">Ответственный</dt>
+                    <dd class="col-sm-9">{{ task.assigned_to.username if task.assigned_to else '—' }}</dd>
                 </dl>
                 {% endif %}
+            </div>
+        </div>
+
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5 mb-3">Комментарии</h2>
+                {% if can_comment %}
+                <form method="post" action="{{ url_for('add_comment', task_id=task.id) }}" class="mb-3">
+                    <label class="form-label">Новый комментарий</label>
+                    <textarea class="form-control" name="content" rows="3" placeholder="Напишите комментарий..." required></textarea>
+                    <div class="mt-2">
+                        <button class="btn btn-outline-primary btn-sm" type="submit">Добавить комментарий</button>
+                    </div>
+                </form>
+                {% endif %}
+
+                <div class="comment-list">
+                    {% for comment in task.comments %}
+                    <div class="comment-item">
+                        <div class="comment-meta">
+                            <strong>{{ comment.author.username }}</strong>
+                            <span class="text-muted">{{ comment.created_at | datetime }}</span>
+                        </div>
+                        <div class="comment-text">{{ comment.content }}</div>
+                    </div>
+                    {% else %}
+                    <div class="text-muted">Комментариев пока нет</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h5 mb-3">История изменений</h2>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr>
+                                <th>Когда</th>
+                                <th>Кто</th>
+                                <th>Поле</th>
+                                <th>Было</th>
+                                <th>Стало</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in task.change_history %}
+                            <tr>
+                                <td>{{ item.changed_at | datetime }}</td>
+                                <td>{{ item.changed_by.username if item.changed_by else 'System' }}</td>
+                                <td>{{ item.field_name }}</td>
+                                <td>{{ item.old_value if item.old_value else '—' }}</td>
+                                <td>{{ item.new_value if item.new_value else '—' }}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="5" class="text-center text-muted">История пока пустая</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -90,7 +174,7 @@
                             </tr>
                             {% else %}
                             <tr>
-                                <td colspan="4" class="text-center text-muted">История пока пустая</td>
+                                <td colspan="4" class="text-center text-muted">История статусов пока пустая</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -105,6 +189,9 @@
             <div class="card-body">
                 <h2 class="h6">Состояние</h2>
                 <p class="mb-2"><span class="badge text-bg-secondary">{{ task.status.name }}</span></p>
+                <p class="small text-muted mb-0">Приоритет: {{ task.priority_label }}</p>
+                <p class="small text-muted mb-0">Клиент: {{ task.client.username }}</p>
+                <p class="small text-muted mb-0">Ответственный: {{ task.assigned_to.username if task.assigned_to else '—' }}</p>
                 <p class="small text-muted mb-0">Создал: {{ task.created_by.username if task.created_by else '—' }}</p>
                 <p class="small text-muted mb-0">Создана: {{ task.created_at | datetime }}</p>
                 <p class="small text-muted mb-0">Обновлена: {{ task.updated_at | datetime }}</p>

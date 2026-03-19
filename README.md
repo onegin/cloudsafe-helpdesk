@@ -1,28 +1,68 @@
 # CloudSafe Helpdesk
 
-Полнофункциональная тикет-система на Flask + SQLite с ролями, статусами, архивом задач и API для создания тикетов по Bearer token.
+Тикет-система на Flask + SQLite с ролями, разграничением доступа операторов к клиентам, уведомлениями (Email/Telegram), архивом, API и расширенным трекингом изменений.
 
-## Возможности
+## Основные возможности
 
 - Роли: `admin`, `operator`, `client`
-- Управление пользователями (админ): создание, редактирование, деактивация
-- Управление статусами (админ): создание, редактирование, удаление (если нет задач)
-- Активные задачи: список, фильтры, детальный просмотр
-- История смены статусов (кто и когда изменил)
-- Архив задач (без удаления из БД), восстановление
-- Канбан-доска с drag-and-drop (для admin/operator)
-- API: `POST /api/tasks` с Bearer token
-- Пароли хранятся в виде хеша
-- Автосоздание начальных данных при первом запуске
+- Управление пользователями (администратор)
+- Настраиваемые статусы задач
+- Архив и восстановление задач
+- API: создание задач по Bearer token
+
+## Что добавлено в этой версии
+
+### 1. Доступ операторов к задачам клиентов
+
+- Добавлена модель связи `ClientAccess` (`operator_id`, `client_id`)
+- Администратор управляет правами на странице **Доступы**
+- Оператор видит/редактирует только задачи клиентов, к которым у него есть доступ
+- В формах создания/редактирования задачи оператору доступен только его список клиентов
+- Проверки доступа выполняются во всех view (включая карточку задачи, архив, канбан, смену статуса)
+
+### 2. Уведомления о новых задачах и комментариях
+
+- У каждого пользователя есть:
+  - `email` (обязателен)
+  - `telegram_chat_id` (опционально)
+- Канал уведомления:
+  - если указан `telegram_chat_id` и включён Telegram bot -> Telegram
+  - иначе -> Email
+- При создании задачи уведомляются:
+  - администраторы
+  - клиент
+  - назначенный ответственный оператор (если есть)
+- При комментариях уведомляются:
+  - администраторы всегда
+  - клиент (если комментарий от админа/оператора)
+  - операторы с доступом к клиенту (если комментарий от клиента/оператора)
+- Поддерживаются задачи, созданные через Web и API
+
+### 3. Дополнительные функции трекера
+
+Реализовано более 3 функций из списка:
+
+- Комментарии к задачам
+- Назначение ответственного оператора
+- История изменений полей задачи (`TaskHistory`)
+- Приоритет задач (`low/medium/high`)
+- Расширенные фильтры и поиск по теме/содержимому
+
+### 4. Безопасность
+
+- Добавлена CSRF-защита для web-форм
+- Проверка ролей и прав доступа на уровне view
+- Пароли хешируются
 
 ## Стек
 
-- Python
+- Python 3
 - Flask
 - Flask-Login
-- Flask-SQLAlchemy (легко переключить SQLite на PostgreSQL через `DATABASE_URL`)
+- Flask-SQLAlchemy
+- SQLite (переключается на PostgreSQL через `DATABASE_URL`)
 - Bootstrap 5
-- SortableJS (для канбана)
+- SortableJS (канбан)
 
 ## Структура проекта
 
@@ -34,149 +74,121 @@
 ├── config.py
 ├── forms.py
 ├── models.py
+├── notifications.py
+├── services.py
 ├── requirements.txt
 ├── README.md
+├── .env.example
 ├── templates/
 │   ├── base.html
 │   ├── login.html
 │   ├── change_password.html
+│   ├── profile.html
 │   ├── index.html
 │   ├── task_form.html
 │   ├── task.html
-│   ├── users.html
-│   ├── user_form.html
-│   ├── statuses.html
 │   ├── archive.html
 │   ├── kanban.html
+│   ├── users.html
+│   ├── user_form.html
+│   ├── access.html
+│   ├── statuses.html
 │   └── error.html
 └── static/
-    ├── css/
-    │   └── style.css
-    └── js/
-        └── kanban.js
+    ├── css/style.css
+    └── js/kanban.js
 ```
 
 ## Установка и запуск
 
-1. (Опционально) создать виртуальное окружение:
-
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-```
-
-2. Установить зависимости:
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-3. Запустить приложение:
-
-```bash
 python app.py
 ```
 
-4. Открыть в браузере:
-
-- http://localhost:5000
+Открыть: `http://localhost:5000`
 
 ## Учётные данные по умолчанию
 
-При первом запуске создаются:
+Создаются автоматически при первом запуске:
 
-- Администратор:
-  - логин: `admin`
-  - пароль: `admin`
-- Статусы:
-  - `Новая`
-  - `В работе`
-  - `Завершена`
+- Логин: `admin`
+- Пароль: `admin`
 
-Рекомендуется сразу сменить пароль администратора.
+Рекомендуется сразу сменить пароль.
 
-## Переменные окружения
+## Конфигурация
 
-- `SECRET_KEY` — секрет Flask
-- `DATABASE_URL` — строка подключения к БД (по умолчанию `sqlite:///ticket_system.db`)
-- `ADMIN_LOGIN` — логин initial admin (по умолчанию `admin`)
-- `ADMIN_PASSWORD` — пароль initial admin (по умолчанию `admin`)
+Используйте `.env.example` как шаблон.
 
-Пример:
+Обязательные/часто используемые переменные:
 
-```bash
-export SECRET_KEY="super-secret-key"
-export ADMIN_PASSWORD="strong-password"
-python app.py
-```
+- `SECRET_KEY`
+- `DATABASE_URL`
+- `ADMIN_LOGIN`
+- `ADMIN_PASSWORD`
+- `CSRF_ENABLED`
 
-## Работа с API
+Telegram:
 
-### Создание токена для клиента
+- `TELEGRAM_BOT_ENABLED=true|false`
+- `TELEGRAM_BOT_TOKEN=...`
 
-1. Войти как админ
-2. Перейти в раздел **Пользователи**
-3. Для клиента нажать **Сгенерировать**
-4. Скопировать токен (он показывается один раз)
+Email (SMTP):
 
-### Endpoint
+- `MAIL_SERVER`
+- `MAIL_PORT`
+- `MAIL_USE_TLS`
+- `MAIL_USERNAME`
+- `MAIL_PASSWORD`
+- `MAIL_DEFAULT_SENDER`
 
-- `POST /api/tasks`
-- Авторизация: `Authorization: Bearer <token>`
+## API
 
-### Пример запроса (токен клиента)
+### Создание задачи
 
-```bash
-curl -X POST http://localhost:5000/api/tasks \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "theme": "Проблема с VPN",
-    "content": "Не подключается VPN с домашнего компьютера",
-    "due_date": "2026-04-01"
-  }'
-```
+`POST /api/tasks`
 
-### Пример запроса (токен admin/operator)
+Заголовки:
 
-```bash
-curl -X POST http://localhost:5000/api/tasks \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "theme": "Новый запрос",
-    "content": "Описание задачи",
-    "client_id": 3,
-    "due_date": "2026-04-05"
-  }'
-```
+- `Authorization: Bearer <TOKEN>`
+- `Content-Type: application/json`
 
-Также можно передавать `client_email` или `client_username` вместо `client_id`.
-
-### Пример успешного ответа
+Тело (пример):
 
 ```json
 {
-  "id": 12,
   "theme": "Проблема с VPN",
-  "content": "Не подключается VPN с домашнего компьютера",
-  "due_date": "2026-04-01",
-  "archived": false,
-  "created_at": "2026-03-19T19:20:11.123456",
-  "status": {
-    "id": 1,
-    "name": "Новая"
-  },
-  "client": {
-    "id": 3,
-    "username": "client1"
-  }
+  "content": "Не подключается VPN",
+  "client_id": 3,
+  "due_date": "2026-12-31",
+  "priority": "high",
+  "assigned_to_id": 5
 }
 ```
 
+Можно передать `client_email` или `client_username` вместо `client_id`.
+
+## Обновление существующей установки
+
+Если у вас уже есть старая БД `ticket_system.db`, отдельный Alembic не требуется.
+При запуске `python app.py` автоматически выполняются простые миграции:
+
+- добавляются новые поля в `users` (`email`, `telegram_chat_id`)
+- добавляются новые поля в `tasks` (`priority`, `assigned_to_id`)
+- создаются новые таблицы (`client_access`, `task_comments`, `task_history`)
+
+После запуска проверьте в UI:
+
+1. заполнены email пользователей
+2. назначены доступы операторов к клиентам (страница **Доступы**)
+3. настроены SMTP/Telegram переменные окружения
+
 ## Примечания
 
-- Архивные задачи нельзя редактировать и переводить в другие статусы
+- Архивные задачи нельзя редактировать и комментировать
+- Оператор видит только разрешённых клиентов
 - Клиент видит только свои задачи
-- Оператор и администратор видят все задачи
-- Для production рекомендуется запускать через WSGI (`gunicorn`) и reverse proxy (`nginx`)
+- Для production рекомендуется запуск через `gunicorn` + `nginx`

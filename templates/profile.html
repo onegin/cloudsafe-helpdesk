@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Профиль{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-6">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h1 class="h4 mb-3">Мой профиль</h1>
+                <form method="post" class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label">Email</label>
+                        <input class="form-control" type="email" name="email" required value="{{ form_data.get('email', '') }}">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Telegram Chat ID</label>
+                        <input class="form-control" name="telegram_chat_id" value="{{ form_data.get('telegram_chat_id', '') }}" placeholder="например: 123456789">
+                        <div class="form-text">Если указан, уведомления будут отправляться в Telegram. Иначе — на email.</div>
+                    </div>
+                    <div class="col-12 d-flex gap-2">
+                        <button class="btn btn-primary" type="submit">Сохранить</button>
+                        <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Назад</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

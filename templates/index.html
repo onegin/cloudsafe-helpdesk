@@ -9,7 +9,7 @@
 <div class="card mb-3">
     <div class="card-body">
         <form class="row g-3" method="get" action="{{ url_for('index') }}">
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label class="form-label">Статус</label>
                 <select class="form-select" name="status_id">
                     <option value="">Все</option>
@@ -19,8 +19,18 @@
                 </select>
             </div>
 
+            <div class="col-md-2">
+                <label class="form-label">Приоритет</label>
+                <select class="form-select" name="priority">
+                    <option value="">Все</option>
+                    {% for value, label in priorities %}
+                    <option value="{{ value }}" {% if filters.priority == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
             {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label class="form-label">Клиент</label>
                 <select class="form-select" name="client_id">
                     <option value="">Все</option>
@@ -31,11 +41,17 @@
             </div>
             {% endif %}
 
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label class="form-label">Срок (дата)</label>
                 <input class="form-control" type="date" name="due_date" value="{{ filters.due_date }}">
             </div>
-            <div class="col-md-3 d-flex align-items-end gap-2">
+
+            <div class="col-md-4">
+                <label class="form-label">Поиск</label>
+                <input class="form-control" name="q" placeholder="Тема или содержимое" value="{{ filters.q }}">
+            </div>
+
+            <div class="col-12 d-flex gap-2">
                 <button class="btn btn-outline-primary" type="submit">Фильтровать</button>
                 <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Сброс</a>
             </div>
@@ -50,7 +66,9 @@
                 <tr>
                     <th>ID</th>
                     <th>Тема</th>
+                    <th>Приоритет</th>
                     {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}<th>Клиент</th>{% endif %}
+                    <th>Ответственный</th>
                     <th>Статус</th>
                     <th>Срок</th>
                     <th>Создана</th>
@@ -67,9 +85,11 @@
                         <span class="badge text-bg-danger ms-2">Просрочена</span>
                         {% endif %}
                     </td>
+                    <td><span class="badge text-bg-info">{{ task.priority_label }}</span></td>
                     {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
                     <td>{{ task.client.username }}</td>
                     {% endif %}
+                    <td>{{ task.assigned_to.username if task.assigned_to else '—' }}</td>
                     <td><span class="badge text-bg-secondary">{{ task.status.name }}</span></td>
                     <td>{{ task.due_date }}</td>
                     <td>{{ task.created_at | datetime }}</td>
@@ -79,7 +99,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="text-center text-muted py-4">Задач пока нет</td>
+                    <td colspan="{{ 9 if current_user.role in (Roles.ADMIN, Roles.OPERATOR) else 8 }}" class="text-center text-muted py-4">Задач пока нет</td>
                 </tr>
                 {% endfor %}
             </tbody>

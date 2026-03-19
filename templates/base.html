@@ -3,6 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{% block title %}CloudSafe Helpdesk{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
@@ -23,6 +24,7 @@
                 <li class="nav-item"><a class="nav-link" href="{{ url_for('archive') }}">Архив</a></li>
                 {% if current_user.role == Roles.ADMIN %}
                 <li class="nav-item"><a class="nav-link" href="{{ url_for('users') }}">Пользователи</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('access_management') }}">Доступы</a></li>
                 <li class="nav-item"><a class="nav-link" href="{{ url_for('statuses') }}">Статусы</a></li>
                 {% endif %}
             </ul>
@@ -31,6 +33,7 @@
                     <strong>{{ current_user.username }}</strong>
                     <span class="badge text-bg-light text-dark ms-1">{{ current_user.role }}</span>
                 </div>
+                <a class="btn btn-sm btn-light" href="{{ url_for('profile') }}">Профиль</a>
                 <a class="btn btn-sm btn-light" href="{{ url_for('auth.change_password') }}">Сменить пароль</a>
                 <a class="btn btn-sm btn-outline-light" href="{{ url_for('auth.logout') }}">Выход</a>
             </div>
@@ -57,6 +60,20 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(() => {
+    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    if (!token) return;
+    document.querySelectorAll('form[method="post"]').forEach((form) => {
+        if (form.querySelector('input[name="csrf_token"]')) return;
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'csrf_token';
+        input.value = token;
+        form.appendChild(input);
+    });
+})();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

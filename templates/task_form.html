@@ -39,6 +39,41 @@
                         <input class="form-control" type="date" name="due_date" required value="{{ form_data.get('due_date', '') }}">
                     </div>
 
+                    <div class="col-md-6">
+                        <label class="form-label">Приоритет</label>
+                        <select class="form-select" name="priority">
+                            {% for value, label in priorities %}
+                            <option value="{{ value }}" {% if form_data.get('priority', 'medium') == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
+                    <div class="col-md-6">
+                        <label class="form-label">Ответственный оператор</label>
+                        <select class="form-select" name="assigned_to_id">
+                            <option value="">Не назначен</option>
+                            {% for operator in assignees %}
+                            <option value="{{ operator.id }}" {% if form_data.get('assigned_to_id')|int == operator.id %}selected{% endif %}>{{ operator.username }}</option>
+                            {% endfor %}
+                        </select>
+                        {% if not assignees %}
+                        <div class="form-text">Для выбранного клиента пока нет доступных операторов.</div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <div class="col-12 d-flex flex-wrap gap-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="notify_client" id="notify_client" {% if form_data.get('notify_client', 'on') %}checked{% endif %}>
+                            <label class="form-check-label" for="notify_client">Уведомить клиента</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="notify_admins" id="notify_admins" {% if form_data.get('notify_admins', 'on') %}checked{% endif %}>
+                            <label class="form-check-label" for="notify_admins">Уведомить администраторов</label>
+                        </div>
+                    </div>
+
                     <div class="col-12 d-flex gap-2">
                         <button class="btn btn-primary" type="submit">Создать задачу</button>
                         <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Отмена</a>

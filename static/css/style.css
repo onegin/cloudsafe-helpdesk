@@ -24,6 +24,30 @@ body {
     font-size: 0.825rem;
 }
 
+.comment-list {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.comment-item {
+    background: #f8fafc;
+    border: 1px solid #dde4ee;
+    border-radius: 0.5rem;
+    padding: 0.65rem 0.75rem;
+}
+
+.comment-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+    margin-bottom: 0.35rem;
+}
+
+.comment-text {
+    white-space: pre-wrap;
+}
+
 .kanban-board {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));

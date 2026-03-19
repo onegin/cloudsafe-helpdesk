@@ -21,6 +21,16 @@
                         </select>
                     </div>
 
+                    <div class="col-md-6">
+                        <label class="form-label">Email</label>
+                        <input class="form-control" type="email" name="email" required value="{{ form_data.get('email', '') }}">
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">Telegram Chat ID</label>
+                        <input class="form-control" name="telegram_chat_id" value="{{ form_data.get('telegram_chat_id', '') }}" placeholder="например: 123456789">
+                    </div>
+
                     <div class="col-12">
                         <label class="form-label">Пароль {% if user %}(оставьте пустым, чтобы не менять){% endif %}</label>
                         <input class="form-control" type="password" name="password" {% if not user %}required{% endif %}>

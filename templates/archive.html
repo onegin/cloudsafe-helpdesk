@@ -18,6 +18,15 @@
                     {% endfor %}
                 </select>
             </div>
+            <div class="col-md-3">
+                <label class="form-label">Приоритет</label>
+                <select class="form-select" name="priority">
+                    <option value="">Все</option>
+                    {% for value, label in priorities %}
+                    <option value="{{ value }}" {% if priority == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <div class="col-md-3 d-flex align-items-end gap-2">
                 <button class="btn btn-outline-primary" type="submit">Фильтровать</button>
                 <a class="btn btn-outline-secondary" href="{{ url_for('archive') }}">Сброс</a>
@@ -34,6 +43,7 @@
                     <th>ID</th>
                     <th>Тема</th>
                     <th>Клиент</th>
+                    <th>Приоритет</th>
                     <th>Статус</th>
                     <th>Архивирована</th>
                     <th></th>
@@ -45,6 +55,7 @@
                     <td>{{ task.id }}</td>
                     <td><a href="{{ url_for('task_detail', task_id=task.id) }}" class="text-decoration-none">{{ task.theme }}</a></td>
                     <td>{{ task.client.username }}</td>
+                    <td>{{ task.priority_label }}</td>
                     <td><span class="badge text-bg-secondary">{{ task.status.name }}</span></td>
                     <td>{{ task.archived_at | datetime }}</td>
                     <td>
@@ -57,7 +68,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="6" class="text-center text-muted py-4">Архив пуст</td>
+                    <td colspan="7" class="text-center text-muted py-4">Архив пуст</td>
                 </tr>
                 {% endfor %}
             </tbody>

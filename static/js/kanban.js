@@ -10,6 +10,7 @@
     }
 
     const moveUrlTemplate = board.dataset.moveUrlTemplate || "";
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") || "";
 
     const refreshCounters = () => {
         document.querySelectorAll(".kanban-column").forEach((column) => {
@@ -29,6 +30,7 @@
             headers: {
                 "Content-Type": "application/json",
                 "X-Requested-With": "XMLHttpRequest",
+                "X-CSRFToken": csrfToken,
             },
             body: JSON.stringify({ status_id: Number(statusId) }),
         });
