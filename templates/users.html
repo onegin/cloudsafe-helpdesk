@@ -4,7 +4,8 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="h3 mb-0">Пользователи</h1>
     <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary" href="{{ url_for('access_management') }}">Права операторов</a>
+        <a class="btn btn-outline-secondary" href="{{ url_for('organizations') }}">Организации</a>
+        <a class="btn btn-outline-secondary" href="{{ url_for('access_management') }}">Доступ операторов</a>
         <a class="btn btn-primary" href="{{ url_for('user_create') }}">Добавить пользователя</a>
     </div>
 </div>
@@ -16,6 +17,7 @@
                 <tr>
                     <th>ID</th>
                     <th>Логин</th>
+                    <th>Организация</th>
                     <th>Контакты</th>
                     <th>Роль</th>
                     <th>Статус</th>
@@ -34,6 +36,7 @@
                         <span class="badge text-bg-warning ms-2">нужна смена пароля</span>
                         {% endif %}
                     </td>
+                    <td>{{ user.organization.name if user.organization else '—' }}</td>
                     <td>
                         <div class="small"><strong>Email:</strong> {{ user.email or '—' }}</div>
                         <div class="small"><strong>Telegram:</strong> {{ user.telegram_chat_id or '—' }}</div>
@@ -65,7 +68,7 @@
                 {% if user.role == Roles.CLIENT %}
                 <tr class="table-light">
                     <td></td>
-                    <td colspan="7">
+                    <td colspan="8">
                         <div class="small text-muted mb-1">Токены клиента:</div>
                         <div class="d-flex flex-wrap gap-2">
                             {% for token in user.api_tokens.all() %}

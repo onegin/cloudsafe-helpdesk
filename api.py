@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, request, url_for
+from sqlalchemy import or_
 
 from forms import ValidationError, Validators
-from models import ApiToken, Roles, Status, StatusHistory, Task, User, db
+from models import ApiToken, Organization, Roles, Status, StatusHistory, Task, User, db
 from services import (
-    can_access_client,
+    can_access_organization,
     collect_new_task_recipients,
     dispatch_notifications,
     record_task_change,
@@ -32,48 +33,33 @@ def _get_token_user() -> User | None:
     return ApiToken.resolve_user(raw_token)
 
 
-def _resolve_client_from_payload(payload: dict, actor: User) -> User | None:
-    if actor.role == Roles.CLIENT:
-        requested_id = payload.get("client_id")
-        requested_email = (payload.get("client_email") or "").strip()
-        requested_username = (payload.get("client_username") or "").strip()
-
-        if requested_id:
-            try:
-                if int(requested_id) != actor.id:
-                    return None
-            except (TypeError, ValueError):
-                return None
-        if requested_email and requested_email != actor.email and requested_email != actor.username:
-            return None
-        if requested_username and requested_username != actor.username:
-            return None
-        return actor
-
+def _resolve_client_from_payload(payload: dict) -> tuple[User | None, str | None]:
     client_id = payload.get("client_id")
     client_email = (payload.get("client_email") or "").strip()
     client_username = (payload.get("client_username") or "").strip()
+    identifier_provided = client_id is not None or bool(client_email) or bool(client_username)
 
     query = User.query.filter_by(role=Roles.CLIENT, active=True)
-    client = None
+
     if client_id is not None:
         try:
             client_id = int(client_id)
         except (TypeError, ValueError):
-            return None
+            return None, "Некорректный client_id"
         client = query.filter_by(id=client_id).first()
-    elif client_email:
-        client = query.filter((User.email == client_email) | (User.username == client_email)).first()
-    elif client_username:
+        return client, None if client else "Клиент не найден"
+
+    if client_email:
+        client = query.filter(or_(User.email == client_email, User.username == client_email)).first()
+        return client, None if client else "Клиент не найден"
+
+    if client_username:
         client = query.filter_by(username=client_username).first()
+        return client, None if client else "Клиент не найден"
 
-    if not client:
-        return None
-
-    if actor.role == Roles.OPERATOR and not can_access_client(actor, client.id):
-        return None
-
-    return client
+    if identifier_provided:
+        return None, "Клиент не найден"
+    return None, None
 
 
 @api_bp.route("/tasks", methods=["POST"])
@@ -86,30 +72,67 @@ def create_task_api():
     if not isinstance(payload, dict):
         return _error("Invalid JSON body", 400)
 
+    require_organization = token_user.role in (Roles.ADMIN, Roles.OPERATOR)
     try:
-        cleaned = Validators.task_payload(payload)
+        cleaned = Validators.task_payload(payload, require_organization=require_organization)
     except ValidationError as exc:
         return _error("Validation error", 400, details=str(exc))
 
-    client = _resolve_client_from_payload(payload, token_user)
-    if not client:
-        if token_user.role == Roles.CLIENT:
+    organization: Organization | None = None
+    client: User | None = None
+
+    if token_user.role == Roles.CLIENT:
+        if not token_user.organization_id:
+            return _error("Forbidden", 403, details="Client user is not bound to organization")
+
+        organization = token_user.organization
+        client = token_user
+
+        if cleaned.get("organization_id") and cleaned["organization_id"] != token_user.organization_id:
+            return _error(
+                "Forbidden",
+                403,
+                details="Client token can create tasks only inside own organization",
+            )
+
+        if cleaned.get("client_id") and cleaned["client_id"] != token_user.id:
             return _error(
                 "Forbidden",
                 403,
                 details="Client token can create tasks only for the owner",
             )
-        return _error(
-            "Validation error",
-            400,
-            details="Provide existing and accessible client_id or client_email/client_username",
-        )
+
+        requested_email = (payload.get("client_email") or "").strip()
+        requested_username = (payload.get("client_username") or "").strip()
+        if requested_email and requested_email not in {token_user.email, token_user.username}:
+            return _error("Forbidden", 403, details="client_email does not match token owner")
+        if requested_username and requested_username != token_user.username:
+            return _error("Forbidden", 403, details="client_username does not match token owner")
+
+    else:
+        organization = Organization.query.get(cleaned["organization_id"])
+        if not organization:
+            return _error("Validation error", 400, details="Организация не найдена")
+
+        if token_user.role == Roles.OPERATOR and not can_access_organization(token_user, organization.id):
+            return _error("Forbidden", 403, details="Нет доступа к выбранной организации")
+
+        client, client_error = _resolve_client_from_payload(payload)
+        if client_error:
+            return _error("Validation error", 400, details=client_error)
+
+        if client and client.organization_id != organization.id:
+            return _error(
+                "Validation error",
+                400,
+                details="Клиент должен принадлежать выбранной организации",
+            )
 
     initial_status = Status.query.order_by(Status.sort_order.asc(), Status.id.asc()).first()
     if not initial_status:
         return _error("Configuration error", 500, details="No statuses configured")
 
-    assignee, assignee_error = resolve_assignee(token_user, client.id, cleaned.get("assigned_to_id"))
+    assignee, assignee_error = resolve_assignee(token_user, organization.id, cleaned.get("assigned_to_id"))
     if assignee_error:
         if token_user.role == Roles.CLIENT:
             return _error("Forbidden", 403, details=assignee_error)
@@ -120,6 +143,7 @@ def create_task_api():
         content=cleaned["content"],
         due_date=cleaned["due_date"],
         priority=cleaned["priority"],
+        organization=organization,
         client=client,
         status=initial_status,
         created_by=token_user,
@@ -139,7 +163,8 @@ def create_task_api():
 
     record_task_change(task, token_user, "theme", None, task.theme)
     record_task_change(task, token_user, "content", None, task.content)
-    record_task_change(task, token_user, "client", None, task.client.username)
+    record_task_change(task, token_user, "organization", None, task.organization.name)
+    record_task_change(task, token_user, "client", None, task.client.username if task.client else "Все сотрудники")
     record_task_change(task, token_user, "due_date", None, task.due_date)
     record_task_change(task, token_user, "priority", None, task.priority_label)
     record_task_change(
@@ -167,7 +192,19 @@ def create_task_api():
         "archived": task.archived,
         "created_at": task.created_at.isoformat(),
         "status": {"id": initial_status.id, "name": initial_status.name},
-        "client": {"id": client.id, "username": client.username, "email": client.email},
+        "organization": {
+            "id": task.organization.id,
+            "name": task.organization.name,
+        },
+        "client": (
+            {
+                "id": task.client.id,
+                "username": task.client.username,
+                "email": task.client.email,
+            }
+            if task.client
+            else None
+        ),
         "assigned_to": (
             {
                 "id": task.assigned_to.id,

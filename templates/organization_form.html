@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{% if organization %}Организация: редактирование{% else %}Новая организация{% endif %}{% endblock %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-7">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h1 class="h4 mb-3">{% if organization %}Редактирование организации #{{ organization.id }}{% else %}Создание организации{% endif %}</h1>
+                <form method="post" class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label">Название</label>
+                        <input class="form-control" name="name" maxlength="255" required value="{{ form_data.get('name', '') }}">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Описание</label>
+                        <textarea class="form-control" rows="4" name="description">{{ form_data.get('description', '') }}</textarea>
+                    </div>
+                    <div class="col-12 d-flex gap-2">
+                        <button class="btn btn-primary" type="submit">Сохранить</button>
+                        <a class="btn btn-outline-secondary" href="{{ url_for('organizations') }}">Назад</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {% if organization %}
+    <div class="col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2 class="h5 mb-0">Сотрудники организации</h2>
+                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('user_create', organization_id=organization.id) }}">Добавить сотрудника</a>
+                </div>
+
+                <div class="list-group">
+                    {% for client in clients %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="fw-semibold">{{ client.username }}</div>
+                            <div class="small text-muted">{{ client.email or '—' }}</div>
+                        </div>
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('user_edit', user_id=client.id) }}">Открыть</a>
+                    </div>
+                    {% else %}
+                    <div class="text-muted">В этой организации пока нет сотрудников.</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

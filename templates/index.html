@@ -30,8 +30,18 @@
             </div>
 
             {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
-            <div class="col-md-2">
-                <label class="form-label">Клиент</label>
+            <div class="col-md-3">
+                <label class="form-label">Организация</label>
+                <select class="form-select" name="organization_id">
+                    <option value="">Все</option>
+                    {% for organization in organizations %}
+                    <option value="{{ organization.id }}" {% if filters.organization_id == organization.id %}selected{% endif %}>{{ organization.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="col-md-3">
+                <label class="form-label">Сотрудник</label>
                 <select class="form-select" name="client_id">
                     <option value="">Все</option>
                     {% for client in clients %}
@@ -66,8 +76,9 @@
                 <tr>
                     <th>ID</th>
                     <th>Тема</th>
+                    <th>Организация</th>
+                    <th>Сотрудник</th>
                     <th>Приоритет</th>
-                    {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}<th>Клиент</th>{% endif %}
                     <th>Ответственный</th>
                     <th>Статус</th>
                     <th>Срок</th>
@@ -84,11 +95,13 @@
                         {% if task.is_overdue() %}
                         <span class="badge text-bg-danger ms-2">Просрочена</span>
                         {% endif %}
+                        {% if current_user.role == Roles.CLIENT and task.client_id is none %}
+                        <span class="badge text-bg-info ms-2">Общая задача</span>
+                        {% endif %}
                     </td>
+                    <td>{{ task.organization.name if task.organization else '—' }}</td>
+                    <td>{{ task.target_label }}</td>
                     <td><span class="badge text-bg-info">{{ task.priority_label }}</span></td>
-                    {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
-                    <td>{{ task.client.username }}</td>
-                    {% endif %}
                     <td>{{ task.assigned_to.username if task.assigned_to else '—' }}</td>
                     <td><span class="badge text-bg-secondary">{{ task.status.name }}</span></td>
                     <td>{{ task.due_date }}</td>
@@ -99,7 +112,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="{{ 9 if current_user.role in (Roles.ADMIN, Roles.OPERATOR) else 8 }}" class="text-center text-muted py-4">Задач пока нет</td>
+                    <td colspan="10" class="text-center text-muted py-4">Задач пока нет</td>
                 </tr>
                 {% endfor %}
             </tbody>

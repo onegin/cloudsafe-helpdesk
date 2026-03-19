@@ -8,6 +8,18 @@
                 <h1 class="h4 mb-3">Мой профиль</h1>
                 <form method="post" class="row g-3">
                     <div class="col-12">
+                        <label class="form-label">Логин</label>
+                        <input class="form-control" value="{{ current_user.username }}" disabled>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Роль</label>
+                        <input class="form-control" value="{{ current_user.role }}" disabled>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Организация</label>
+                        <input class="form-control" value="{{ current_user.organization.name if current_user.organization else '—' }}" disabled>
+                    </div>
+                    <div class="col-12">
                         <label class="form-label">Email</label>
                         <input class="form-control" type="email" name="email" required value="{{ form_data.get('email', '') }}">
                     </div>

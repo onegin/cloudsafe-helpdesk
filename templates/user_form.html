@@ -14,11 +14,22 @@
 
                     <div class="col-md-6">
                         <label class="form-label">Роль</label>
-                        <select class="form-select" name="role" required>
+                        <select class="form-select" id="role" name="role" required>
                             <option value="admin" {% if form_data.get('role') == 'admin' %}selected{% endif %}>Администратор</option>
                             <option value="operator" {% if form_data.get('role') == 'operator' %}selected{% endif %}>Оператор</option>
                             <option value="client" {% if form_data.get('role') == 'client' %}selected{% endif %}>Клиент</option>
                         </select>
+                    </div>
+
+                    <div class="col-md-6" id="organization-group">
+                        <label class="form-label">Организация</label>
+                        <select class="form-select" id="organization_id" name="organization_id" data-selected="{{ form_data.get('organization_id', '') }}">
+                            <option value="">Выберите организацию</option>
+                            {% for organization in organizations %}
+                            <option value="{{ organization.id }}" {% if form_data.get('organization_id')|int == organization.id %}selected{% endif %}>{{ organization.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Для ролей admin/operator поле не требуется.</div>
                     </div>
 
                     <div class="col-md-6">
@@ -48,7 +59,7 @@
                         </div>
 
                         {% if not user %}
-                        <div class="form-check">
+                        <div class="form-check" id="create-token-group">
                             <input class="form-check-input" type="checkbox" id="create_token" name="create_token" checked>
                             <label class="form-check-label" for="create_token">Для клиента сразу создать API токен</label>
                         </div>
@@ -64,4 +75,35 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+(() => {
+    const roleSelect = document.getElementById('role');
+    const organizationGroup = document.getElementById('organization-group');
+    const organizationSelect = document.getElementById('organization_id');
+    const createTokenGroup = document.getElementById('create-token-group');
+
+    if (roleSelect === null || organizationGroup === null || organizationSelect === null) return;
+
+    function refreshRoleFields() {
+        const isClient = roleSelect.value === 'client';
+        organizationGroup.style.display = isClient ? '' : 'none';
+        organizationSelect.required = isClient;
+
+        if (isClient === false) {
+            organizationSelect.value = '';
+        }
+
+        if (createTokenGroup) {
+            createTokenGroup.style.display = isClient ? '' : 'none';
+        }
+    }
+
+    roleSelect.addEventListener('change', refreshRoleFields);
+    refreshRoleFields();
+})();
+</script>
 {% endblock %}

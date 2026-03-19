@@ -33,6 +33,30 @@ class Priority:
     }
 
 
+class Organization(db.Model):
+    __tablename__ = "organizations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    description = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    users = db.relationship("User", back_populates="organization", lazy="dynamic")
+    tasks = db.relationship("Task", back_populates="organization", lazy="dynamic")
+    operator_accesses = db.relationship(
+        "OperatorOrganizationAccess",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+
 class User(UserMixin, db.Model):
     __tablename__ = "users"
 
@@ -44,9 +68,13 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(255), nullable=True, index=True)
     telegram_chat_id = db.Column(db.String(64), nullable=True)
 
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=True, index=True)
+
     active = db.Column(db.Boolean, nullable=False, default=True)
     must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    organization = db.relationship("Organization", back_populates="users")
 
     tasks = db.relationship(
         "Task",
@@ -86,17 +114,10 @@ class User(UserMixin, db.Model):
         lazy="dynamic",
     )
 
-    operator_access = db.relationship(
-        "ClientAccess",
+    operator_org_access = db.relationship(
+        "OperatorOrganizationAccess",
         back_populates="operator",
-        foreign_keys="ClientAccess.operator_id",
-        cascade="all, delete-orphan",
-        lazy="dynamic",
-    )
-    client_access = db.relationship(
-        "ClientAccess",
-        back_populates="client",
-        foreign_keys="ClientAccess.client_id",
+        foreign_keys="OperatorOrganizationAccess.operator_id",
         cascade="all, delete-orphan",
         lazy="dynamic",
     )
@@ -120,19 +141,19 @@ class User(UserMixin, db.Model):
         return self.active
 
 
-class ClientAccess(db.Model):
-    __tablename__ = "client_access"
+class OperatorOrganizationAccess(db.Model):
+    __tablename__ = "operator_organization_access"
 
     id = db.Column(db.Integer, primary_key=True)
     operator_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
-    client_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=False, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
-    operator = db.relationship("User", foreign_keys=[operator_id], back_populates="operator_access")
-    client = db.relationship("User", foreign_keys=[client_id], back_populates="client_access")
+    operator = db.relationship("User", foreign_keys=[operator_id], back_populates="operator_org_access")
+    organization = db.relationship("Organization", back_populates="operator_accesses")
 
     __table_args__ = (
-        db.UniqueConstraint("operator_id", "client_id", name="uq_operator_client_access"),
+        db.UniqueConstraint("operator_id", "organization_id", name="uq_operator_organization_access"),
     )
 
 
@@ -157,7 +178,8 @@ class Task(db.Model):
 
     priority = db.Column(db.String(20), nullable=False, default=Priority.MEDIUM, index=True)
 
-    client_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=False, index=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     status_id = db.Column(db.Integer, db.ForeignKey("statuses.id"), nullable=False, index=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     assigned_to_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
@@ -173,6 +195,7 @@ class Task(db.Model):
         onupdate=datetime.utcnow,
     )
 
+    organization = db.relationship("Organization", back_populates="tasks")
     client = db.relationship("User", back_populates="tasks", foreign_keys=[client_id])
     status = db.relationship("Status", back_populates="tasks")
     created_by = db.relationship("User", back_populates="created_tasks", foreign_keys=[created_by_id])
@@ -203,6 +226,10 @@ class Task(db.Model):
     @property
     def priority_label(self) -> str:
         return Priority.LABELS.get(self.priority, self.priority)
+
+    @property
+    def target_label(self) -> str:
+        return self.client.username if self.client else "Все сотрудники"
 
 
 class StatusHistory(db.Model):
@@ -299,8 +326,9 @@ __all__ = [
     "db",
     "Roles",
     "Priority",
+    "Organization",
     "User",
-    "ClientAccess",
+    "OperatorOrganizationAccess",
     "Status",
     "Task",
     "StatusHistory",

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Организации{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Организации</h1>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="{{ url_for('users') }}">К пользователям</a>
+        <a class="btn btn-primary" href="{{ url_for('organization_create') }}">Создать организацию</a>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Название</th>
+                    <th>Описание</th>
+                    <th>Сотрудников</th>
+                    <th>Задач</th>
+                    <th>Создана</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for organization in organizations %}
+                <tr>
+                    <td>{{ organization.id }}</td>
+                    <td><strong>{{ organization.name }}</strong></td>
+                    <td>{{ organization.description or '—' }}</td>
+                    <td>{{ organization.users.count() }}</td>
+                    <td>{{ organization.tasks.count() }}</td>
+                    <td>{{ organization.created_at | datetime }}</td>
+                    <td class="text-nowrap">
+                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('organization_edit', organization_id=organization.id) }}">Редактировать</a>
+                        <form class="d-inline" method="post" action="{{ url_for('organization_delete', organization_id=organization.id) }}" onsubmit="return confirm('Удалить организацию?');">
+                            <button class="btn btn-sm btn-outline-danger" type="submit">Удалить</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center text-muted py-4">Организации пока не созданы</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

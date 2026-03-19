@@ -44,7 +44,7 @@ class Validators:
             raise ValidationError(f"Некорректное значение поля '{field_name}'") from exc
 
     @staticmethod
-    def task_payload(data: dict[str, Any], require_client: bool = False) -> dict[str, Any]:
+    def task_payload(data: dict[str, Any], require_organization: bool = False) -> dict[str, Any]:
         theme = (data.get("theme") or "").strip()
         content = (data.get("content") or "").strip()
         due_date_raw = (data.get("due_date") or "").strip()
@@ -60,23 +60,20 @@ class Validators:
 
         due_date = Validators.parse_due_date(due_date_raw)
         priority = Validators.parse_priority(data.get("priority"))
+        organization_id = Validators.parse_optional_int(data.get("organization_id"), "organization_id")
+
+        if require_organization and not organization_id:
+            raise ValidationError("Нужно выбрать организацию")
 
         cleaned = {
             "theme": theme,
             "content": content,
             "due_date": due_date,
             "priority": priority,
+            "organization_id": organization_id,
+            "client_id": Validators.parse_optional_int(data.get("client_id"), "client_id"),
             "assigned_to_id": Validators.parse_optional_int(data.get("assigned_to_id"), "assigned_to_id"),
         }
-
-        if require_client:
-            client_id = data.get("client_id")
-            if not client_id:
-                raise ValidationError("Нужно выбрать клиента")
-            try:
-                cleaned["client_id"] = int(client_id)
-            except (TypeError, ValueError) as exc:
-                raise ValidationError("Некорректный client_id") from exc
 
         return cleaned
 
@@ -87,6 +84,7 @@ class Validators:
         password = (data.get("password") or "").strip()
         email = Validators.parse_email(data.get("email") or "")
         telegram_chat_id = (data.get("telegram_chat_id") or "").strip()
+        organization_id = Validators.parse_optional_int(data.get("organization_id"), "organization_id")
 
         if not username:
             raise ValidationError("Логин обязателен")
@@ -94,12 +92,17 @@ class Validators:
             raise ValidationError("Некорректная роль")
         if password_required and not password:
             raise ValidationError("Пароль обязателен")
+        if role == Roles.CLIENT and not organization_id:
+            raise ValidationError("Для клиента нужно выбрать организацию")
+        if role != Roles.CLIENT:
+            organization_id = None
 
         cleaned = {
             "username": username,
             "role": role,
             "email": email,
             "telegram_chat_id": telegram_chat_id or None,
+            "organization_id": organization_id,
         }
         if password:
             cleaned["password"] = password

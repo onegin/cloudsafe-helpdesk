@@ -36,8 +36,17 @@
                         <textarea class="form-control" name="content" rows="6" required>{{ task.content }}</textarea>
                     </div>
                     <div class="col-md-6">
-                        <label class="form-label">Клиент</label>
-                        <select class="form-select" name="client_id" required>
+                        <label class="form-label">Организация</label>
+                        <select class="form-select" id="organization_id" name="organization_id" required>
+                            {% for organization in organizations %}
+                            <option value="{{ organization.id }}" {% if task.organization_id == organization.id %}selected{% endif %}>{{ organization.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Сотрудник (опционально)</label>
+                        <select class="form-select" id="client_id" name="client_id" data-selected="{{ task.client_id or '' }}">
+                            <option value="">Все сотрудники</option>
                             {% for client in clients %}
                             <option value="{{ client.id }}" {% if task.client_id == client.id %}selected{% endif %}>{{ client.username }}</option>
                             {% endfor %}
@@ -57,7 +66,7 @@
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Ответственный оператор</label>
-                        <select class="form-select" name="assigned_to_id">
+                        <select class="form-select" id="assigned_to_id" name="assigned_to_id" data-selected="{{ task.assigned_to_id or '' }}">
                             <option value="">Не назначен</option>
                             {% for operator in assignees %}
                             <option value="{{ operator.id }}" {% if task.assigned_to and task.assigned_to.id == operator.id %}selected{% endif %}>{{ operator.username }}</option>
@@ -75,8 +84,10 @@
                     <dd class="col-sm-9">{{ task.theme }}</dd>
                     <dt class="col-sm-3">Содержимое</dt>
                     <dd class="col-sm-9"><pre class="mb-0 details-pre">{{ task.content }}</pre></dd>
-                    <dt class="col-sm-3">Клиент</dt>
-                    <dd class="col-sm-9">{{ task.client.username }}</dd>
+                    <dt class="col-sm-3">Организация</dt>
+                    <dd class="col-sm-9">{{ task.organization.name if task.organization else '—' }}</dd>
+                    <dt class="col-sm-3">Сотрудник</dt>
+                    <dd class="col-sm-9">{{ task.target_label }}</dd>
                     <dt class="col-sm-3">Срок</dt>
                     <dd class="col-sm-9">{{ task.due_date }}</dd>
                     <dt class="col-sm-3">Приоритет</dt>
@@ -190,7 +201,8 @@
                 <h2 class="h6">Состояние</h2>
                 <p class="mb-2"><span class="badge text-bg-secondary">{{ task.status.name }}</span></p>
                 <p class="small text-muted mb-0">Приоритет: {{ task.priority_label }}</p>
-                <p class="small text-muted mb-0">Клиент: {{ task.client.username }}</p>
+                <p class="small text-muted mb-0">Организация: {{ task.organization.name if task.organization else '—' }}</p>
+                <p class="small text-muted mb-0">Сотрудник: {{ task.target_label }}</p>
                 <p class="small text-muted mb-0">Ответственный: {{ task.assigned_to.username if task.assigned_to else '—' }}</p>
                 <p class="small text-muted mb-0">Создал: {{ task.created_by.username if task.created_by else '—' }}</p>
                 <p class="small text-muted mb-0">Создана: {{ task.created_at | datetime }}</p>
@@ -219,4 +231,59 @@
         {% endif %}
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{% if can_edit %}
+<script>
+(() => {
+    const orgSelect = document.getElementById('organization_id');
+    const clientSelect = document.getElementById('client_id');
+    const assigneeSelect = document.getElementById('assigned_to_id');
+
+    if (orgSelect === null || clientSelect === null) return;
+
+    const clientsByOrg = {{ clients_by_org | tojson }};
+    const assigneesByOrg = {{ assignees_by_org | tojson }};
+
+    const selectedClient = String(clientSelect.dataset.selected || '');
+    const selectedAssignee = assigneeSelect ? String(assigneeSelect.dataset.selected || '') : '';
+
+    function refill(selectEl, items, selectedValue, emptyLabel) {
+        const prevValue = String(selectEl.value || selectedValue || '');
+        selectEl.innerHTML = '';
+
+        const baseOption = document.createElement('option');
+        baseOption.value = '';
+        baseOption.textContent = emptyLabel;
+        selectEl.appendChild(baseOption);
+
+        items.forEach((item) => {
+            const option = document.createElement('option');
+            option.value = String(item.id);
+            option.textContent = item.username;
+            selectEl.appendChild(option);
+        });
+
+        const hasPrev = items.some((item) => String(item.id) === prevValue);
+        selectEl.value = hasPrev ? prevValue : '';
+    }
+
+    function refreshByOrganization() {
+        const orgId = String(orgSelect.value || '');
+        const clientItems = clientsByOrg[orgId] || [];
+        refill(clientSelect, clientItems, selectedClient, 'Все сотрудники');
+
+        if (assigneeSelect) {
+            const assigneeItems = assigneesByOrg[orgId] || [];
+            refill(assigneeSelect, assigneeItems, selectedAssignee, 'Не назначен');
+        }
+    }
+
+    orgSelect.addEventListener('change', refreshByOrganization);
+    refreshByOrganization();
+})();
+</script>
+{% endif %}
 {% endblock %}

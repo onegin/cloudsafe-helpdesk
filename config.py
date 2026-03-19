@@ -29,3 +29,5 @@ class Config:
     MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER", "")
 
     CSRF_ENABLED = _env_bool("CSRF_ENABLED", True)
+
+    APP_VERSION = os.getenv("APP_VERSION", "1.0")
