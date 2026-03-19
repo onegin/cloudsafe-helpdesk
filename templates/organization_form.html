@@ -11,10 +11,56 @@
                         <label class="form-label">Название</label>
                         <input class="form-control" name="name" maxlength="255" required value="{{ form_data.get('name', '') }}">
                     </div>
+
                     <div class="col-12">
                         <label class="form-label">Описание</label>
-                        <textarea class="form-control" rows="4" name="description">{{ form_data.get('description', '') }}</textarea>
+                        <textarea class="form-control" rows="3" name="description">{{ form_data.get('description', '') }}</textarea>
                     </div>
+
+                    <div class="col-12">
+                        <label class="form-label">Адрес</label>
+                        <input class="form-control" name="address" value="{{ form_data.get('address', '') }}">
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">ИНН</label>
+                        <input class="form-control" name="inn" value="{{ form_data.get('inn', '') }}">
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">КПП</label>
+                        <input class="form-control" name="kpp" value="{{ form_data.get('kpp', '') }}">
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label">Банковские реквизиты</label>
+                        <textarea class="form-control" rows="3" name="bank_details">{{ form_data.get('bank_details', '') }}</textarea>
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">Телефон</label>
+                        <input class="form-control" name="phone" value="{{ form_data.get('phone', '') }}">
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">Email</label>
+                        <input class="form-control" type="email" name="email" value="{{ form_data.get('email', '') }}">
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label">Сайт</label>
+                        <input class="form-control" name="website" value="{{ form_data.get('website', '') }}" placeholder="https://example.com">
+                    </div>
+
+                    {% if not organization %}
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="generate_token" name="generate_token" {% if form_data.get('generate_token', 'on') %}checked{% endif %}>
+                            <label class="form-check-label" for="generate_token">Сгенерировать API токен при создании</label>
+                        </div>
+                    </div>
+                    {% endif %}
+
                     <div class="col-12 d-flex gap-2">
                         <button class="btn btn-primary" type="submit">Сохранить</button>
                         <a class="btn btn-outline-secondary" href="{{ url_for('organizations') }}">Назад</a>
@@ -26,21 +72,39 @@
 
     {% if organization %}
     <div class="col-lg-5">
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h2 class="h6">API интеграция</h2>
+                <p class="small text-muted mb-2">Токен хранится в базе в хешированном виде. Новый токен показывается только один раз.</p>
+                <p class="mb-2">Текущий префикс:
+                    {% if organization.api_token_prefix %}
+                    <span class="badge text-bg-secondary">{{ organization.api_token_prefix }}…</span>
+                    {% else %}
+                    <span class="text-muted">не создан</span>
+                    {% endif %}
+                </p>
+                <form method="post" action="{{ url_for('organization_new_token', organization_id=organization.id) }}">
+                    <button class="btn btn-outline-primary btn-sm" type="submit">Сгенерировать новый токен</button>
+                </form>
+            </div>
+        </div>
+
         <div class="card shadow-sm">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h2 class="h5 mb-0">Сотрудники организации</h2>
-                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('user_create', organization_id=organization.id) }}">Добавить сотрудника</a>
+                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('employee_create', organization_id=organization.id) }}">Добавить</a>
                 </div>
 
                 <div class="list-group">
-                    {% for client in clients %}
+                    {% for employee in employees %}
                     <div class="list-group-item d-flex justify-content-between align-items-center">
                         <div>
-                            <div class="fw-semibold">{{ client.username }}</div>
-                            <div class="small text-muted">{{ client.email or '—' }}</div>
+                            <div class="fw-semibold">{{ employee.full_name }}</div>
+                            <div class="small text-muted">{{ employee.position or '—' }}</div>
+                            <div class="small text-muted">{{ employee.email }}</div>
                         </div>
-                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('user_edit', user_id=client.id) }}">Открыть</a>
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('employee_edit', employee_id=employee.id) }}">Открыть</a>
                     </div>
                     {% else %}
                     <div class="text-muted">В этой организации пока нет сотрудников.</div>

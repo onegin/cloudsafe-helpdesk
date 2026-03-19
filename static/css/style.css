@@ -4,7 +4,7 @@ body {
 }
 
 body.app-shell {
-    background-color: #f4f6f9;
+    background-color: var(--background-color);
     display: flex;
     flex-direction: column;
     min-height: 100vh;
@@ -15,12 +15,38 @@ body.app-shell {
     width: 100%;
 }
 
+.app-navbar {
+    background-color: var(--secondary-color);
+}
+
+.app-logo {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+}
+
 .app-footer {
     flex-shrink: 0;
-    border-top: 1px solid #dfe5ed;
-    background: #ffffff;
-    color: #4f5d74;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    background: var(--secondary-color);
+    color: #ffffff;
     padding: 0.85rem 0;
+}
+
+a {
+    color: var(--primary-color);
+}
+
+.btn-primary,
+.btn-outline-primary:hover,
+.bg-primary {
+    background-color: var(--primary-color) !important;
+    border-color: var(--primary-color) !important;
+}
+
+.btn-outline-primary {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
 }
 
 .card {
@@ -105,7 +131,7 @@ body.app-shell {
 }
 
 .kanban-card-title {
-    color: #0d6efd;
+    color: var(--primary-color);
     text-decoration: none;
     font-weight: 600;
     display: block;

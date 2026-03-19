@@ -1,10 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Пользователи{% endblock %}
+{% block title %}Пользователи системы{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3 mb-0">Пользователи</h1>
+    <h1 class="h3 mb-0">Пользователи системы</h1>
     <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary" href="{{ url_for('organizations') }}">Организации</a>
         <a class="btn btn-outline-secondary" href="{{ url_for('access_management') }}">Доступ операторов</a>
         <a class="btn btn-primary" href="{{ url_for('user_create') }}">Добавить пользователя</a>
     </div>
@@ -17,11 +16,9 @@
                 <tr>
                     <th>ID</th>
                     <th>Логин</th>
-                    <th>Организация</th>
                     <th>Контакты</th>
                     <th>Роль</th>
                     <th>Статус</th>
-                    <th>Токены API</th>
                     <th>Создан</th>
                     <th></th>
                 </tr>
@@ -36,7 +33,6 @@
                         <span class="badge text-bg-warning ms-2">нужна смена пароля</span>
                         {% endif %}
                     </td>
-                    <td>{{ user.organization.name if user.organization else '—' }}</td>
                     <td>
                         <div class="small"><strong>Email:</strong> {{ user.email or '—' }}</div>
                         <div class="small"><strong>Telegram:</strong> {{ user.telegram_chat_id or '—' }}</div>
@@ -49,48 +45,15 @@
                         <span class="badge text-bg-danger">disabled</span>
                         {% endif %}
                     </td>
-                    <td>
-                        {% if user.role == Roles.CLIENT %}
-                        <div class="small mb-2">Активных: {{ user.api_tokens.filter_by(revoked=False).count() }}</div>
-                        <form class="d-inline" method="post" action="{{ url_for('user_new_token', user_id=user.id) }}">
-                            <button class="btn btn-sm btn-outline-primary">Сгенерировать</button>
-                        </form>
-                        {% else %}
-                        <span class="text-muted small">-</span>
-                        {% endif %}
-                    </td>
                     <td>{{ user.created_at | datetime }}</td>
                     <td>
                         <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('user_edit', user_id=user.id) }}">Редактировать</a>
                     </td>
                 </tr>
-
-                {% if user.role == Roles.CLIENT %}
-                <tr class="table-light">
-                    <td></td>
-                    <td colspan="8">
-                        <div class="small text-muted mb-1">Токены клиента:</div>
-                        <div class="d-flex flex-wrap gap-2">
-                            {% for token in user.api_tokens.all() %}
-                            <div class="token-pill">
-                                <span>{{ token.token_prefix }}…</span>
-                                {% if token.revoked %}
-                                <span class="badge text-bg-danger">revoked</span>
-                                {% else %}
-                                <span class="badge text-bg-success">active</span>
-                                <form method="post" action="{{ url_for('revoke_token', user_id=user.id, token_id=token.id) }}" class="d-inline">
-                                    <button class="btn btn-sm btn-link p-0 text-danger">отозвать</button>
-                                </form>
-                                {% endif %}
-                                <span class="text-muted">создан {{ token.created_at | datetime }}</span>
-                            </div>
-                            {% else %}
-                            <span class="text-muted">нет токенов</span>
-                            {% endfor %}
-                        </div>
-                    </td>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center text-muted py-4">Пользователи не найдены</td>
                 </tr>
-                {% endif %}
                 {% endfor %}
             </tbody>
         </table>

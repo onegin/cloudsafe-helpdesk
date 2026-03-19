@@ -29,7 +29,6 @@
                 </select>
             </div>
 
-            {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
             <div class="col-md-3">
                 <label class="form-label">Организация</label>
                 <select class="form-select" name="organization_id">
@@ -42,14 +41,13 @@
 
             <div class="col-md-3">
                 <label class="form-label">Сотрудник</label>
-                <select class="form-select" name="client_id">
+                <select class="form-select" name="employee_id">
                     <option value="">Все</option>
-                    {% for client in clients %}
-                    <option value="{{ client.id }}" {% if filters.client_id == client.id %}selected{% endif %}>{{ client.username }}</option>
+                    {% for employee in employees %}
+                    <option value="{{ employee.id }}" {% if filters.employee_id == employee.id %}selected{% endif %}>{{ employee.full_name }}</option>
                     {% endfor %}
                 </select>
             </div>
-            {% endif %}
 
             <div class="col-md-2 d-flex align-items-end gap-2">
                 <button class="btn btn-outline-primary" type="submit">Фильтровать</button>
@@ -85,11 +83,9 @@
                     <td><span class="badge text-bg-secondary">{{ task.status.name }}</span></td>
                     <td>{{ task.archived_at | datetime }}</td>
                     <td>
-                        {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
                         <form method="post" action="{{ url_for('restore_task', task_id=task.id) }}">
                             <button class="btn btn-sm btn-outline-success">Восстановить</button>
                         </form>
-                        {% endif %}
                     </td>
                 </tr>
                 {% else %}

@@ -15,9 +15,10 @@ db = SQLAlchemy()
 class Roles:
     ADMIN = "admin"
     OPERATOR = "operator"
-    CLIENT = "client"
+    CLIENT = "client"  # legacy role kept for migration compatibility
 
-    ALL = (ADMIN, OPERATOR, CLIENT)
+    ALL = (ADMIN, OPERATOR)
+    INTERNAL = (ADMIN, OPERATOR)
 
 
 class Priority:
@@ -39,6 +40,19 @@ class Organization(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False, unique=True, index=True)
     description = db.Column(db.Text, nullable=True)
+
+    address = db.Column(db.String(500), nullable=True)
+    inn = db.Column(db.String(20), nullable=True)
+    kpp = db.Column(db.String(20), nullable=True)
+    bank_details = db.Column(db.Text, nullable=True)
+    phone = db.Column(db.String(64), nullable=True)
+    email = db.Column(db.String(255), nullable=True)
+    website = db.Column(db.String(255), nullable=True)
+
+    # Stores SHA256 hash of raw token.
+    api_token = db.Column(db.String(64), nullable=True, unique=True, index=True)
+    api_token_prefix = db.Column(db.String(12), nullable=True)
+
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime,
@@ -48,6 +62,12 @@ class Organization(db.Model):
     )
 
     users = db.relationship("User", back_populates="organization", lazy="dynamic")
+    employees = db.relationship(
+        "Employee",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
     tasks = db.relationship("Task", back_populates="organization", lazy="dynamic")
     operator_accesses = db.relationship(
         "OperatorOrganizationAccess",
@@ -56,6 +76,56 @@ class Organization(db.Model):
         lazy="dynamic",
     )
 
+    @staticmethod
+    def hash_api_token(raw_token: str) -> str:
+        return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+    def generate_api_token(self) -> str:
+        raw_token = secrets.token_urlsafe(32)
+        self.api_token = self.hash_api_token(raw_token)
+        self.api_token_prefix = raw_token[:8]
+        return raw_token
+
+    @classmethod
+    def resolve_by_token(cls, raw_token: str) -> "Organization" | None:
+        if not raw_token:
+            return None
+        token_hash = cls.hash_api_token(raw_token)
+        return cls.query.filter_by(api_token=token_hash).first()
+
+
+class Employee(db.Model):
+    __tablename__ = "employees"
+
+    id = db.Column(db.Integer, primary_key=True)
+    first_name = db.Column(db.String(120), nullable=False)
+    last_name = db.Column(db.String(120), nullable=True)
+    position = db.Column(db.String(120), nullable=True)
+
+    telegram = db.Column(db.String(64), nullable=True)
+    phone = db.Column(db.String(64), nullable=True)
+    email = db.Column(db.String(255), nullable=False, index=True)
+
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=False, index=True)
+
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    organization = db.relationship("Organization", back_populates="employees")
+    tasks = db.relationship("Task", back_populates="employee", foreign_keys="Task.employee_id", lazy="dynamic")
+
+    @property
+    def full_name(self) -> str:
+        last = (self.last_name or "").strip()
+        first = (self.first_name or "").strip()
+        return f"{last} {first}".strip() if last else first
+
 
 class User(UserMixin, db.Model):
     __tablename__ = "users"
@@ -63,11 +133,12 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(20), nullable=False, default=Roles.CLIENT, index=True)
+    role = db.Column(db.String(20), nullable=False, default=Roles.OPERATOR, index=True)
 
     email = db.Column(db.String(255), nullable=True, index=True)
     telegram_chat_id = db.Column(db.String(64), nullable=True)
 
+    # Legacy optional field kept for migration/history compatibility.
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=True, index=True)
 
     active = db.Column(db.Boolean, nullable=False, default=True)
@@ -76,12 +147,6 @@ class User(UserMixin, db.Model):
 
     organization = db.relationship("Organization", back_populates="users")
 
-    tasks = db.relationship(
-        "Task",
-        back_populates="client",
-        foreign_keys="Task.client_id",
-        lazy="dynamic",
-    )
     created_tasks = db.relationship(
         "Task",
         back_populates="created_by",
@@ -163,6 +228,7 @@ class Status(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), unique=True, nullable=False)
     sort_order = db.Column(db.Integer, nullable=False, default=0, index=True)
+    is_final = db.Column(db.Boolean, nullable=False, default=False, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     tasks = db.relationship("Task", back_populates="status", lazy="dynamic")
@@ -179,7 +245,7 @@ class Task(db.Model):
     priority = db.Column(db.String(20), nullable=False, default=Priority.MEDIUM, index=True)
 
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=False, index=True)
-    client_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey("employees.id"), nullable=True, index=True)
     status_id = db.Column(db.Integer, db.ForeignKey("statuses.id"), nullable=False, index=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     assigned_to_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
@@ -196,7 +262,7 @@ class Task(db.Model):
     )
 
     organization = db.relationship("Organization", back_populates="tasks")
-    client = db.relationship("User", back_populates="tasks", foreign_keys=[client_id])
+    employee = db.relationship("Employee", back_populates="tasks", foreign_keys=[employee_id])
     status = db.relationship("Status", back_populates="tasks")
     created_by = db.relationship("User", back_populates="created_tasks", foreign_keys=[created_by_id])
     assigned_to = db.relationship("User", back_populates="assigned_tasks", foreign_keys=[assigned_to_id])
@@ -229,7 +295,7 @@ class Task(db.Model):
 
     @property
     def target_label(self) -> str:
-        return self.client.username if self.client else "Все сотрудники"
+        return self.employee.full_name if self.employee else "Общая задача организации"
 
 
 class StatusHistory(db.Model):
@@ -322,11 +388,26 @@ class ApiToken(db.Model):
         return token.user
 
 
+class Setting(db.Model):
+    __tablename__ = "settings"
+
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(120), nullable=False, unique=True, index=True)
+    value = db.Column(db.Text, nullable=True)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
 __all__ = [
     "db",
     "Roles",
     "Priority",
     "Organization",
+    "Employee",
     "User",
     "OperatorOrganizationAccess",
     "Status",
@@ -335,4 +416,5 @@ __all__ = [
     "TaskHistory",
     "TaskComment",
     "ApiToken",
+    "Setting",
 ]

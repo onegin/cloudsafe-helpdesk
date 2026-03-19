@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Сотрудники{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Сотрудники организаций</h1>
+    {% if current_user.role == Roles.ADMIN %}
+    <a class="btn btn-primary" href="{{ url_for('employee_create') }}">Добавить сотрудника</a>
+    {% endif %}
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <form class="row g-3" method="get" action="{{ url_for('employees') }}">
+            <div class="col-md-4">
+                <label class="form-label">Организация</label>
+                <select class="form-select" name="organization_id">
+                    <option value="">Все</option>
+                    {% for organization in organizations %}
+                    <option value="{{ organization.id }}" {% if filters.organization_id == organization.id %}selected{% endif %}>{{ organization.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4 d-flex align-items-end gap-2">
+                <button class="btn btn-outline-primary" type="submit">Фильтровать</button>
+                <a class="btn btn-outline-secondary" href="{{ url_for('employees') }}">Сброс</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>ФИО</th>
+                    <th>Организация</th>
+                    <th>Должность</th>
+                    <th>Контакты</th>
+                    <th>Статус</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for employee in employees %}
+                <tr>
+                    <td>{{ employee.id }}</td>
+                    <td>{{ employee.full_name }}</td>
+                    <td>{{ employee.organization.name }}</td>
+                    <td>{{ employee.position or '—' }}</td>
+                    <td>
+                        <div class="small"><strong>Email:</strong> {{ employee.email }}</div>
+                        <div class="small"><strong>Телефон:</strong> {{ employee.phone or '—' }}</div>
+                        <div class="small"><strong>Telegram:</strong> {{ employee.telegram or '—' }}</div>
+                    </td>
+                    <td>
+                        {% if employee.is_active %}
+                        <span class="badge text-bg-success">active</span>
+                        {% else %}
+                        <span class="badge text-bg-danger">disabled</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-nowrap">
+                        {% if current_user.role == Roles.ADMIN %}
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('employee_edit', employee_id=employee.id) }}">Редактировать</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center text-muted py-4">Сотрудники не найдены</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

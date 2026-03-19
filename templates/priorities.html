@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Приоритеты{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Справочник приоритетов</h1>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <p class="text-muted">В текущей версии приоритеты фиксированы в системе.</p>
+        <div class="table-responsive">
+            <table class="table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Код</th>
+                        <th>Название</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for value, label in priorities %}
+                    <tr>
+                        <td><code>{{ value }}</code></td>
+                        <td>{{ label }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

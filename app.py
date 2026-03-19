@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import csv
 import secrets
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from functools import wraps
+from io import StringIO
+from pathlib import Path
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
 from flask import (
     Flask,
+    Response,
     abort,
     flash,
     jsonify,
@@ -17,18 +22,19 @@ from flask import (
     url_for,
 )
 from flask_login import LoginManager, current_user, login_required
-from sqlalchemy import inspect, or_, text
+from sqlalchemy import func, inspect, or_, text
+from werkzeug.utils import secure_filename
 
 from api import api_bp
 from auth import auth_bp
 from config import Config
 from forms import ValidationError, Validators
 from models import (
-    ApiToken,
+    Employee,
     OperatorOrganizationAccess,
     Organization,
-    Priority,
     Roles,
+    Setting,
     Status,
     StatusHistory,
     Task,
@@ -37,32 +43,41 @@ from models import (
     db,
 )
 from services import (
+    DEFAULT_SETTINGS,
     admin_users,
     allowed_assignees_for_actor,
-    allowed_clients_for_user,
+    allowed_employees_for_user,
     allowed_organizations_for_user,
-    can_access_client,
     can_access_organization,
     can_view_task,
     collect_comment_recipients,
+    collect_new_task_recipients,
     comment_notification_text,
     dispatch_notifications,
     filter_tasks_for_user,
+    get_all_settings,
     priority_choices,
     record_task_change,
+    reset_settings_to_defaults,
     resolve_assignee,
+    set_setting,
     task_notification_text,
 )
 
+
+load_dotenv()
 
 login_manager = LoginManager()
 login_manager.login_view = "auth.login"
 login_manager.login_message = "Авторизуйтесь для продолжения"
 login_manager.login_message_category = "warning"
 
+LEGACY_CLIENT_ROLE = "legacy_client"
+FINAL_STATUS_NAMES = {"завершена", "выполнена", "закрыта", "done", "closed", "resolved"}
+
 
 def roles_required(*allowed_roles):
-    """Restrict endpoint access to the listed roles."""
+    """Restrict endpoint access to listed roles."""
 
     def decorator(view_func):
         @wraps(view_func)
@@ -94,90 +109,12 @@ def _active_admins_count(exclude_user_id: int | None = None) -> int:
     return query.count()
 
 
-def _ordered_statuses():
+def _ordered_statuses() -> list[Status]:
     return Status.query.order_by(Status.sort_order.asc(), Status.id.asc()).all()
 
 
 def _first_status() -> Status | None:
     return Status.query.order_by(Status.sort_order.asc(), Status.id.asc()).first()
-
-
-def _rebuild_tasks_table(existing_columns: set[str]) -> None:
-    """Rebuild tasks table to support nullable client_id and organization_id."""
-    priority_expr = "COALESCE(NULLIF(priority, ''), 'medium')" if "priority" in existing_columns else "'medium'"
-    organization_expr = "organization_id" if "organization_id" in existing_columns else "NULL"
-    client_expr = "client_id" if "client_id" in existing_columns else "NULL"
-    assigned_expr = "assigned_to_id" if "assigned_to_id" in existing_columns else "NULL"
-    archived_expr = "COALESCE(archived, 0)" if "archived" in existing_columns else "0"
-    archived_at_expr = "archived_at" if "archived_at" in existing_columns else "NULL"
-    created_expr = "COALESCE(created_at, CURRENT_TIMESTAMP)" if "created_at" in existing_columns else "CURRENT_TIMESTAMP"
-    updated_expr = (
-        "COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
-        if "updated_at" in existing_columns
-        else created_expr
-    )
-
-    db.session.execute(text("PRAGMA foreign_keys=OFF"))
-    db.session.execute(text("ALTER TABLE tasks RENAME TO tasks_old"))
-
-    db.session.execute(
-        text(
-            """
-            CREATE TABLE tasks (
-                id INTEGER NOT NULL PRIMARY KEY,
-                theme VARCHAR(255) NOT NULL,
-                content TEXT NOT NULL,
-                due_date DATE NOT NULL,
-                priority VARCHAR(20) NOT NULL DEFAULT 'medium',
-                organization_id INTEGER,
-                client_id INTEGER,
-                status_id INTEGER NOT NULL,
-                created_by_id INTEGER NOT NULL,
-                assigned_to_id INTEGER,
-                archived BOOLEAN NOT NULL DEFAULT 0,
-                archived_at DATETIME,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(organization_id) REFERENCES organizations (id),
-                FOREIGN KEY(client_id) REFERENCES users (id),
-                FOREIGN KEY(status_id) REFERENCES statuses (id),
-                FOREIGN KEY(created_by_id) REFERENCES users (id),
-                FOREIGN KEY(assigned_to_id) REFERENCES users (id)
-            )
-            """
-        )
-    )
-
-    db.session.execute(
-        text(
-            f"""
-            INSERT INTO tasks (
-                id, theme, content, due_date, priority,
-                organization_id, client_id, status_id, created_by_id, assigned_to_id,
-                archived, archived_at, created_at, updated_at
-            )
-            SELECT
-                id,
-                theme,
-                content,
-                due_date,
-                {priority_expr},
-                {organization_expr},
-                {client_expr},
-                status_id,
-                created_by_id,
-                {assigned_expr},
-                {archived_expr},
-                {archived_at_expr},
-                {created_expr},
-                {updated_expr}
-            FROM tasks_old
-            """
-        )
-    )
-
-    db.session.execute(text("DROP TABLE tasks_old"))
-    db.session.execute(text("PRAGMA foreign_keys=ON"))
 
 
 def _generate_unique_org_name(base_name: str, existing_names: set[str]) -> str:
@@ -190,156 +127,513 @@ def _generate_unique_org_name(base_name: str, existing_names: set[str]) -> str:
     return name
 
 
-def _run_simple_schema_migrations() -> None:
-    """Simple SQL migrations for users who already have an old SQLite DB."""
+def _add_column_if_missing(table_name: str, column_name: str, ddl_tail: str) -> None:
+    inspector = inspect(db.engine)
+    table_names = set(inspector.get_table_names())
+    if table_name not in table_names:
+        return
+    existing = {col["name"] for col in inspector.get_columns(table_name)}
+    if column_name in existing:
+        return
+    db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {ddl_tail}"))
+
+
+def _run_simple_schema_migrations(app: Flask) -> None:
+    """Lightweight migrations for existing SQLite installs."""
     inspector = inspect(db.engine)
     table_names = set(inspector.get_table_names())
 
+    # Users
     if "users" in table_names:
-        user_columns = {column["name"] for column in inspector.get_columns("users")}
-        if "email" not in user_columns:
-            db.session.execute(text("ALTER TABLE users ADD COLUMN email VARCHAR(255)"))
-        if "telegram_chat_id" not in user_columns:
-            db.session.execute(text("ALTER TABLE users ADD COLUMN telegram_chat_id VARCHAR(64)"))
-        if "organization_id" not in user_columns:
-            db.session.execute(text("ALTER TABLE users ADD COLUMN organization_id INTEGER"))
+        _add_column_if_missing("users", "email", "email VARCHAR(255)")
+        _add_column_if_missing("users", "telegram_chat_id", "telegram_chat_id VARCHAR(64)")
+        _add_column_if_missing("users", "organization_id", "organization_id INTEGER")
+        _add_column_if_missing("users", "active", "active BOOLEAN DEFAULT 1")
+        _add_column_if_missing("users", "must_change_password", "must_change_password BOOLEAN DEFAULT 0")
 
+    # Organizations
+    if "organizations" in table_names:
+        _add_column_if_missing("organizations", "description", "description TEXT")
+        _add_column_if_missing("organizations", "address", "address VARCHAR(500)")
+        _add_column_if_missing("organizations", "inn", "inn VARCHAR(20)")
+        _add_column_if_missing("organizations", "kpp", "kpp VARCHAR(20)")
+        _add_column_if_missing("organizations", "bank_details", "bank_details TEXT")
+        _add_column_if_missing("organizations", "phone", "phone VARCHAR(64)")
+        _add_column_if_missing("organizations", "email", "email VARCHAR(255)")
+        _add_column_if_missing("organizations", "website", "website VARCHAR(255)")
+        _add_column_if_missing("organizations", "api_token", "api_token VARCHAR(64)")
+        _add_column_if_missing("organizations", "api_token_prefix", "api_token_prefix VARCHAR(12)")
+        _add_column_if_missing("organizations", "updated_at", "updated_at DATETIME")
+
+    # Statuses
+    if "statuses" in table_names:
+        _add_column_if_missing("statuses", "is_final", "is_final BOOLEAN DEFAULT 0")
+
+    # Tasks
     if "tasks" in table_names:
-        task_columns_raw = inspector.get_columns("tasks")
-        task_columns = {column["name"]: column for column in task_columns_raw}
-
-        if "priority" not in task_columns:
-            db.session.execute(text("ALTER TABLE tasks ADD COLUMN priority VARCHAR(20) DEFAULT 'medium'"))
-        if "assigned_to_id" not in task_columns:
-            db.session.execute(text("ALTER TABLE tasks ADD COLUMN assigned_to_id INTEGER"))
-
-        needs_rebuild = (
-            "organization_id" not in task_columns
-            or ("client_id" in task_columns and not task_columns["client_id"].get("nullable", True))
-        )
-        if needs_rebuild:
-            _rebuild_tasks_table(set(task_columns.keys()))
-
-        db.session.execute(text("UPDATE tasks SET priority='medium' WHERE priority IS NULL OR priority = ''"))
+        _add_column_if_missing("tasks", "priority", "priority VARCHAR(20) DEFAULT 'medium'")
+        _add_column_if_missing("tasks", "organization_id", "organization_id INTEGER")
+        _add_column_if_missing("tasks", "employee_id", "employee_id INTEGER")
+        _add_column_if_missing("tasks", "assigned_to_id", "assigned_to_id INTEGER")
+        _add_column_if_missing("tasks", "archived", "archived BOOLEAN DEFAULT 0")
+        _add_column_if_missing("tasks", "archived_at", "archived_at DATETIME")
+        _add_column_if_missing("tasks", "created_at", "created_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+        _add_column_if_missing("tasks", "updated_at", "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP")
 
     db.session.commit()
 
-    # Refresh metadata snapshot after schema-altering operations.
     inspector = inspect(db.engine)
     table_names = set(inspector.get_table_names())
+    task_columns = set()
+    if "tasks" in table_names:
+        task_columns = {column["name"] for column in inspector.get_columns("tasks")}
 
-    if "organizations" not in table_names:
-        return
-
-    existing_names = {
-        row[0]
-        for row in Organization.query.with_entities(Organization.name).all()
-        if row[0]
-    }
-
-    clients = User.query.filter_by(role=Roles.CLIENT).all()
-    for client in clients:
-        if client.organization_id:
-            continue
-        org_name = _generate_unique_org_name(f"Компания {client.username}", existing_names)
-        organization = Organization(name=org_name, description="Создано автоматически при миграции")
-        db.session.add(organization)
-        db.session.flush()
-        client.organization_id = organization.id
-
-    # Ensure all tasks have organization_id.
-    fallback_org = Organization.query.filter_by(name="Организация по умолчанию").first()
-    tasks_without_org = Task.query.filter(Task.organization_id.is_(None)).all()
-    if tasks_without_org and not fallback_org:
-        fallback_org = Organization(name="Организация по умолчанию", description="Создано автоматически")
-        db.session.add(fallback_org)
-        db.session.flush()
-
-    for task in tasks_without_org:
-        if task.client and task.client.organization_id:
-            task.organization_id = task.client.organization_id
-        else:
-            task.organization_id = fallback_org.id if fallback_org else None
-
-    # Convert old operator->client access links to operator->organization links.
+    # Convert old operator->client access into operator->organization access.
     if "client_access" in table_names:
-        rows = db.session.execute(text("SELECT operator_id, client_id FROM client_access")).fetchall()
-        existing_pairs = {
-            (row.operator_id, row.organization_id)
-            for row in OperatorOrganizationAccess.query.with_entities(
-                OperatorOrganizationAccess.operator_id,
-                OperatorOrganizationAccess.organization_id,
-            ).all()
-        }
+        rows = db.session.execute(text("SELECT operator_id, client_id FROM client_access")).mappings().all()
         for row in rows:
-            operator = db.session.get(User, row.operator_id)
-            client = db.session.get(User, row.client_id)
-            if not operator or operator.role != Roles.OPERATOR:
+            org_row = db.session.execute(
+                text("SELECT organization_id FROM users WHERE id = :client_id"),
+                {"client_id": row["client_id"]},
+            ).first()
+            org_id = org_row[0] if org_row else None
+            if not org_id:
                 continue
-            if not client or client.role != Roles.CLIENT or not client.organization_id:
-                continue
-
-            pair = (operator.id, client.organization_id)
-            if pair in existing_pairs:
-                continue
-
-            db.session.add(
-                OperatorOrganizationAccess(
-                    operator_id=operator.id,
-                    organization_id=client.organization_id,
-                )
+            db.session.execute(
+                text(
+                    """
+                    INSERT OR IGNORE INTO operator_organization_access (operator_id, organization_id, created_at)
+                    VALUES (:operator_id, :organization_id, :created_at)
+                    """
+                ),
+                {
+                    "operator_id": row["operator_id"],
+                    "organization_id": org_id,
+                    "created_at": datetime.utcnow(),
+                },
             )
-            existing_pairs.add(pair)
 
-    # Non-client users do not belong to an organization.
-    for user in User.query.filter(User.role != Roles.CLIENT, User.organization_id.is_not(None)).all():
-        user.organization_id = None
+    # Convert legacy client users to Employee entries.
+    legacy_clients = User.query.filter_by(role=Roles.CLIENT).all()
+    if legacy_clients:
+        existing_org_names = {
+            row[0]
+            for row in Organization.query.with_entities(Organization.name).all()
+            if row[0]
+        }
+
+        fallback_admin = User.query.filter_by(role=Roles.ADMIN, active=True).order_by(User.id.asc()).first()
+        if not fallback_admin:
+            fallback_admin = User(
+                username="system_admin",
+                role=Roles.ADMIN,
+                active=True,
+                must_change_password=False,
+                email="system@localhost",
+            )
+            fallback_admin.set_password(app.config.get("ADMIN_PASSWORD", "admin"))
+            db.session.add(fallback_admin)
+            db.session.flush()
+
+        user_to_employee: dict[int, tuple[int, int]] = {}
+
+        for client in legacy_clients:
+            organization = client.organization
+            if not organization:
+                org_name = _generate_unique_org_name(f"Компания {client.username}", existing_org_names)
+                organization = Organization(name=org_name, description="Создано автоматически при миграции")
+                db.session.add(organization)
+                db.session.flush()
+                client.organization_id = organization.id
+
+            employee_email = client.email or f"{client.username}@example.local"
+            employee = Employee.query.filter_by(
+                organization_id=organization.id,
+                email=employee_email,
+                first_name=client.username,
+            ).first()
+            if not employee:
+                employee = Employee(
+                    first_name=client.username,
+                    last_name=None,
+                    position=None,
+                    telegram=client.telegram_chat_id,
+                    phone=None,
+                    email=employee_email,
+                    organization_id=organization.id,
+                    is_active=True,
+                )
+                db.session.add(employee)
+                db.session.flush()
+
+            user_to_employee[client.id] = (employee.id, organization.id)
+
+        for user_id, (employee_id, organization_id) in user_to_employee.items():
+            if "client_id" in task_columns:
+                db.session.execute(
+                    text(
+                        """
+                        UPDATE tasks
+                        SET employee_id = COALESCE(employee_id, :employee_id),
+                            organization_id = COALESCE(organization_id, :organization_id)
+                        WHERE client_id = :user_id
+                        """
+                    ),
+                    {
+                        "employee_id": employee_id,
+                        "organization_id": organization_id,
+                        "user_id": user_id,
+                    },
+                )
+                db.session.execute(
+                    text("UPDATE tasks SET client_id = NULL WHERE client_id = :user_id"),
+                    {"user_id": user_id},
+                )
+
+            db.session.execute(
+                text("UPDATE tasks SET created_by_id = :fallback_id WHERE created_by_id = :user_id"),
+                {"fallback_id": fallback_admin.id, "user_id": user_id},
+            )
+            db.session.execute(
+                text("UPDATE tasks SET assigned_to_id = NULL WHERE assigned_to_id = :user_id"),
+                {"user_id": user_id},
+            )
+
+            if "task_comments" in table_names:
+                db.session.execute(
+                    text("UPDATE task_comments SET user_id = :fallback_id WHERE user_id = :user_id"),
+                    {"fallback_id": fallback_admin.id, "user_id": user_id},
+                )
+            if "status_history" in table_names:
+                db.session.execute(
+                    text("UPDATE status_history SET changed_by_id = NULL WHERE changed_by_id = :user_id"),
+                    {"user_id": user_id},
+                )
+            if "task_history" in table_names:
+                db.session.execute(
+                    text("UPDATE task_history SET changed_by_id = NULL WHERE changed_by_id = :user_id"),
+                    {"user_id": user_id},
+                )
+            if "api_tokens" in table_names:
+                db.session.execute(
+                    text("DELETE FROM api_tokens WHERE user_id = :user_id"),
+                    {"user_id": user_id},
+                )
+
+        for client in legacy_clients:
+            client.active = False
+            client.must_change_password = False
+            client.role = LEGACY_CLIENT_ROLE
+            client.organization_id = None
+            client.set_password(secrets.token_urlsafe(16))
+
+    # Fill organization_id in tasks where possible.
+    if "tasks" in table_names:
+        db.session.execute(
+            text(
+                """
+                UPDATE tasks
+                SET organization_id = (
+                    SELECT e.organization_id
+                    FROM employees e
+                    WHERE e.id = tasks.employee_id
+                )
+                WHERE organization_id IS NULL
+                  AND employee_id IS NOT NULL
+                """
+            )
+        )
+
+        missing_org_tasks = db.session.execute(
+            text("SELECT COUNT(*) FROM tasks WHERE organization_id IS NULL")
+        ).scalar_one()
+
+        if missing_org_tasks:
+            fallback_org = Organization.query.filter_by(name="Организация по умолчанию").first()
+            if not fallback_org:
+                fallback_org = Organization(name="Организация по умолчанию", description="Создано автоматически")
+                db.session.add(fallback_org)
+                db.session.flush()
+
+            db.session.execute(
+                text("UPDATE tasks SET organization_id = :organization_id WHERE organization_id IS NULL"),
+                {"organization_id": fallback_org.id},
+            )
+
+        db.session.execute(
+            text(
+                """
+                UPDATE tasks
+                SET employee_id = NULL
+                WHERE employee_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1
+                    FROM employees e
+                    WHERE e.id = tasks.employee_id
+                      AND e.organization_id != tasks.organization_id
+                  )
+                """
+            )
+        )
+
+    # Make sure non-internal users are inactive.
+    User.query.filter(User.role.notin_(Roles.INTERNAL)).update(
+        {User.active: False}, synchronize_session=False
+    )
+
+    # Setup final statuses if none marked.
+    if Status.query.filter_by(is_final=True).count() == 0:
+        for status in Status.query.all():
+            if status.name.strip().lower() in FINAL_STATUS_NAMES:
+                status.is_final = True
 
     db.session.commit()
 
 
 def bootstrap_defaults(app: Flask) -> None:
-    admin = User.query.filter_by(role=Roles.ADMIN).first()
-    if not admin:
-        admin_login = app.config["ADMIN_LOGIN"]
-        admin_password = app.config["ADMIN_PASSWORD"]
-
-        admin_user = User.query.filter_by(username=admin_login).first()
-        if not admin_user:
-            admin_user = User(username=admin_login)
-            db.session.add(admin_user)
-
-        admin_user.role = Roles.ADMIN
-        admin_user.active = True
-        admin_user.organization_id = None
-        admin_user.must_change_password = admin_password == "admin"
-        admin_user.set_password(admin_password)
-        if not admin_user.email:
-            admin_user.email = f"{admin_login}@example.local"
+    """Create initial statuses, settings and default admin on empty DB."""
+    for key, value in DEFAULT_SETTINGS.items():
+        if not Setting.query.filter_by(key=key).first():
+            db.session.add(Setting(key=key, value=value))
 
     if Status.query.count() == 0:
-        default_statuses = ["Новая", "В работе", "Завершена"]
-        for index, name in enumerate(default_statuses, start=1):
-            db.session.add(Status(name=name, sort_order=index * 10))
+        defaults = [
+            ("Новая", 10, False),
+            ("В работе", 20, False),
+            ("Завершена", 30, True),
+        ]
+        for name, sort_order, is_final in defaults:
+            db.session.add(Status(name=name, sort_order=sort_order, is_final=is_final))
 
-    users_without_email = User.query.filter((User.email.is_(None)) | (User.email == "")).all()
-    for user in users_without_email:
-        user.email = f"{user.username}@example.local"
+    admin_user = User.query.filter_by(role=Roles.ADMIN).first()
+    if not admin_user:
+        admin_user = User(
+            username=app.config.get("ADMIN_LOGIN", "admin"),
+            role=Roles.ADMIN,
+            active=True,
+            must_change_password=True,
+            email="admin@example.local",
+        )
+        admin_user.set_password(app.config.get("ADMIN_PASSWORD", "admin"))
+        db.session.add(admin_user)
+    else:
+        admin_user.active = True
+
+    if Status.query.filter_by(is_final=True).count() == 0:
+        completed = Status.query.filter(Status.name.ilike("%заверш%"))
+        for status in completed:
+            status.is_final = True
 
     db.session.commit()
 
 
-def _generate_csrf_token() -> str:
-    token = session.get("_csrf_token")
-    if not token:
-        token = secrets.token_urlsafe(32)
-        session["_csrf_token"] = token
-    return token
+def _build_task_form_collections(actor: User, selected_org_id: int | None):
+    organizations = allowed_organizations_for_user(actor)
+
+    if selected_org_id and not can_access_organization(actor, selected_org_id):
+        selected_org_id = None
+
+    if not selected_org_id and len(organizations) == 1:
+        selected_org_id = organizations[0].id
+
+    employees_by_org: dict[str, list[dict[str, object]]] = {}
+    assignees_by_org: dict[str, list[dict[str, object]]] = {}
+
+    for organization in organizations:
+        employees_by_org[str(organization.id)] = [
+            {"id": employee.id, "name": employee.full_name}
+            for employee in allowed_employees_for_user(actor, organization.id)
+        ]
+        assignees_by_org[str(organization.id)] = [
+            {"id": operator.id, "name": operator.username}
+            for operator in allowed_assignees_for_actor(actor, organization.id)
+        ]
+
+    employees = allowed_employees_for_user(actor, selected_org_id) if selected_org_id else []
+    assignees = allowed_assignees_for_actor(actor, selected_org_id) if selected_org_id else []
+
+    return {
+        "organizations": organizations,
+        "selected_org_id": selected_org_id,
+        "employees": employees,
+        "assignees": assignees,
+        "employees_by_org": employees_by_org,
+        "assignees_by_org": assignees_by_org,
+    }
+
+
+def _apply_task_filters(base_query):
+    query = filter_tasks_for_user(base_query, current_user)
+
+    statuses = _ordered_statuses()
+    organizations = allowed_organizations_for_user(current_user)
+
+    organization_id = request.args.get("organization_id", type=int)
+    if organization_id:
+        if can_access_organization(current_user, organization_id):
+            query = query.filter(Task.organization_id == organization_id)
+        else:
+            flash("Нет доступа к выбранной организации", "warning")
+            organization_id = None
+
+    employees = allowed_employees_for_user(current_user, organization_id)
+
+    employee_id = request.args.get("employee_id", type=int)
+    if employee_id:
+        employee = Employee.query.get(employee_id)
+        if not employee or not can_access_organization(current_user, employee.organization_id):
+            flash("Нет доступа к выбранному сотруднику", "warning")
+            employee_id = None
+        else:
+            query = query.filter(Task.employee_id == employee_id)
+
+    status_id = request.args.get("status_id", type=int)
+    if status_id:
+        query = query.filter(Task.status_id == status_id)
+
+    priority = (request.args.get("priority") or "").strip().lower()
+    if priority:
+        query = query.filter(Task.priority == priority)
+
+    due_date_raw = (request.args.get("due_date") or "").strip()
+    if due_date_raw:
+        try:
+            due_date = Validators.parse_due_date(due_date_raw)
+            query = query.filter(Task.due_date == due_date)
+        except ValidationError:
+            flash("Некорректная дата срока", "warning")
+
+    q = (request.args.get("q") or "").strip()
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(Task.theme.ilike(like), Task.content.ilike(like)))
+
+    filters = {
+        "organization_id": organization_id,
+        "employee_id": employee_id,
+        "status_id": status_id,
+        "priority": priority,
+        "due_date": due_date_raw,
+        "q": q,
+    }
+
+    return query, statuses, organizations, employees, filters
+
+
+def _build_report_period(source: dict) -> tuple[date, date, dict[str, str]]:
+    defaults = {
+        "days": "30",
+        "start_date": "",
+        "end_date": "",
+    }
+
+    has_input = any((source.get("days"), source.get("start_date"), source.get("end_date")))
+    payload = {
+        "days": source.get("days") if has_input else "30",
+        "start_date": source.get("start_date") if has_input else "",
+        "end_date": source.get("end_date") if has_input else "",
+    }
+
+    try:
+        cleaned = Validators.report_payload(payload)
+    except ValidationError as exc:
+        flash(str(exc), "danger")
+        today = date.today()
+        return today - timedelta(days=29), today, defaults
+
+    today = date.today()
+
+    if cleaned["start_date"] and cleaned["end_date"]:
+        start_date = cleaned["start_date"]
+        end_date = cleaned["end_date"]
+        form_data = {
+            "days": "",
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        }
+        return start_date, end_date, form_data
+
+    days = cleaned["days"] or 30
+    start_date = today - timedelta(days=days - 1)
+    end_date = today
+    form_data = {
+        "days": str(days),
+        "start_date": "",
+        "end_date": "",
+    }
+    return start_date, end_date, form_data
+
+
+def _collect_report_data(start_date: date, end_date: date) -> dict:
+    start_dt = datetime.combine(start_date, time.min)
+    end_dt_exclusive = datetime.combine(end_date + timedelta(days=1), time.min)
+
+    statuses = _ordered_statuses()
+
+    rows = (
+        db.session.query(Task.status_id, func.count(Task.id))
+        .filter(Task.created_at >= start_dt, Task.created_at < end_dt_exclusive)
+        .group_by(Task.status_id)
+        .all()
+    )
+
+    per_status_map = {status.id: 0 for status in statuses}
+    total = 0
+    for status_id, count_value in rows:
+        count_int = int(count_value)
+        per_status_map[status_id] = count_int
+        total += count_int
+
+    completed = 0
+    details: list[dict[str, object]] = []
+    for status in statuses:
+        count_value = per_status_map.get(status.id, 0)
+        if status.is_final:
+            completed += count_value
+        details.append({
+            "status": status,
+            "count": count_value,
+        })
+
+    not_completed = total - completed
+
+    return {
+        "total": total,
+        "completed": completed,
+        "not_completed": not_completed,
+        "details": details,
+        "chart_labels": [item["status"].name for item in details],
+        "chart_values": [item["count"] for item in details],
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+
+def _save_uploaded_file(file_storage, prefix: str, allowed_ext: set[str]) -> str:
+    filename = secure_filename(file_storage.filename or "")
+    if not filename:
+        raise ValidationError("Файл не выбран")
+
+    ext = Path(filename).suffix.lower()
+    if ext not in allowed_ext:
+        raise ValidationError(f"Недопустимый тип файла: {ext}")
+
+    upload_dir = Path("static") / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    unique_name = f"{prefix}_{secrets.token_hex(8)}{ext}"
+    absolute_path = upload_dir / unique_name
+    file_storage.save(absolute_path)
+
+    return f"uploads/{unique_name}"
 
 
 def create_app() -> Flask:
-    app = Flask(__name__)
+    app = Flask(__name__, instance_relative_config=True)
     app.config.from_object(Config)
+
+    Path(app.instance_path).mkdir(parents=True, exist_ok=True)
+    Path("static/uploads").mkdir(parents=True, exist_ok=True)
 
     db.init_app(app)
     login_manager.init_app(app)
@@ -349,89 +643,90 @@ def create_app() -> Flask:
 
     with app.app_context():
         db.create_all()
-        _run_simple_schema_migrations()
-        db.create_all()
+        _run_simple_schema_migrations(app)
         bootstrap_defaults(app)
 
     @login_manager.user_loader
     def load_user(user_id: str):
-        return db.session.get(User, int(user_id))
+        if not user_id.isdigit():
+            return None
+        user = db.session.get(User, int(user_id))
+        if not user:
+            return None
+        if not user.active:
+            return None
+        if user.role not in Roles.INTERNAL:
+            return None
+        return user
+
+    @app.template_global("csrf_token")
+    def csrf_token():
+        token = session.get("_csrf_token")
+        if not token:
+            token = secrets.token_hex(16)
+            session["_csrf_token"] = token
+        return token
 
     @app.before_request
     def csrf_protect():
         if not app.config.get("CSRF_ENABLED", True):
             return None
-        if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
-            return None
-        if request.path.startswith("/api/"):
+
+        if request.method in {"GET", "HEAD", "OPTIONS", "TRACE"}:
             return None
 
-        token = request.form.get("csrf_token") or request.headers.get("X-CSRFToken")
-        session_token = session.get("_csrf_token")
-        if not token or not session_token or token != session_token:
+        if request.endpoint and request.endpoint.startswith("api."):
+            return None
+
+        token = session.get("_csrf_token")
+        incoming = request.form.get("csrf_token") or request.headers.get("X-CSRFToken")
+
+        if not token or token != incoming:
             abort(400)
         return None
 
     @app.context_processor
     def inject_globals():
+        settings = get_all_settings()
+        logo_path = (settings.get("logo_path") or "").strip()
+        favicon_path = (settings.get("favicon_path") or "").strip()
+
         return {
             "Roles": Roles,
-            "Priority": Priority,
-            "csrf_token": _generate_csrf_token,
-            "priority_options": priority_choices(),
             "app_version": app.config.get("APP_VERSION", "1.0"),
+            "site_name": settings.get("site_name") or DEFAULT_SETTINGS["site_name"],
+            "ui_settings": settings,
+            "logo_url": url_for("static", filename=logo_path) if logo_path else None,
+            "favicon_url": url_for("static", filename=favicon_path) if favicon_path else None,
         }
 
     @app.template_filter("datetime")
     def format_datetime(value):
         if not value:
-            return "-"
-        return value.strftime("%Y-%m-%d %H:%M")
-
-    def _build_task_form_collections(actor: User, selected_org_id: int | None):
-        organizations = allowed_organizations_for_user(actor)
-
-        if actor.role == Roles.CLIENT:
-            selected_org_id = actor.organization_id
-        elif selected_org_id and not can_access_organization(actor, selected_org_id):
-            selected_org_id = None
-
-        if not selected_org_id and len(organizations) == 1:
-            selected_org_id = organizations[0].id
-
-        clients_by_org: dict[str, list[dict[str, object]]] = {}
-        assignees_by_org: dict[str, list[dict[str, object]]] = {}
-
-        for organization in organizations:
-            clients_by_org[str(organization.id)] = [
-                {"id": client.id, "username": client.username}
-                for client in allowed_clients_for_user(actor, organization.id)
-            ]
-            assignees_by_org[str(organization.id)] = [
-                {"id": operator.id, "username": operator.username}
-                for operator in allowed_assignees_for_actor(actor, organization.id)
-            ]
-
-        clients = allowed_clients_for_user(actor, selected_org_id) if selected_org_id else []
-        assignees = allowed_assignees_for_actor(actor, selected_org_id) if selected_org_id else []
-
-        return {
-            "organizations": organizations,
-            "selected_org_id": selected_org_id,
-            "clients": clients,
-            "assignees": assignees,
-            "clients_by_org": clients_by_org,
-            "assignees_by_org": assignees_by_org,
-        }
+            return "—"
+        return value.strftime("%d.%m.%Y %H:%M")
 
     @app.route("/")
-    def home():
-        if current_user.is_authenticated:
-            return redirect(url_for("index"))
-        return redirect(url_for("auth.login"))
+    @app.route("/tasks")
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
+    def index():
+        query = Task.query.filter(Task.archived.is_(False))
+        query, statuses, organizations, employees, filters = _apply_task_filters(query)
+
+        tasks = query.order_by(Task.created_at.desc()).all()
+
+        return render_template(
+            "index.html",
+            tasks=tasks,
+            statuses=statuses,
+            organizations=organizations,
+            employees=employees,
+            priorities=priority_choices(),
+            filters=filters,
+        )
 
     @app.route("/profile", methods=["GET", "POST"])
-    @login_required
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
     def profile():
         if request.method == "POST":
             try:
@@ -443,7 +738,7 @@ def create_app() -> Flask:
             current_user.email = cleaned["email"]
             current_user.telegram_chat_id = cleaned["telegram_chat_id"]
             db.session.commit()
-            flash("Настройки профиля обновлены", "success")
+            flash("Профиль обновлён", "success")
             return redirect(url_for("profile"))
 
         form_data = {
@@ -452,190 +747,50 @@ def create_app() -> Flask:
         }
         return render_template("profile.html", form_data=form_data)
 
-    @app.route("/tasks")
-    @login_required
-    def index():
-        statuses = _ordered_statuses()
-        priorities = priority_choices()
-
-        organizations = []
-        clients = []
-        if current_user.role in (Roles.ADMIN, Roles.OPERATOR):
-            organizations = allowed_organizations_for_user(current_user)
-
-        query = Task.query.filter_by(archived=False)
-        query = filter_tasks_for_user(query, current_user)
-
-        status_id = request.args.get("status_id", type=int)
-        if status_id:
-            query = query.filter_by(status_id=status_id)
-
-        organization_id = request.args.get("organization_id", type=int)
-        if organization_id:
-            if can_access_organization(current_user, organization_id):
-                query = query.filter_by(organization_id=organization_id)
-            else:
-                flash("Нет доступа к выбранной организации", "warning")
-                organization_id = None
-
-        if current_user.role in (Roles.ADMIN, Roles.OPERATOR):
-            clients = allowed_clients_for_user(current_user, organization_id)
-
-        client_id = request.args.get("client_id", type=int)
-        if client_id:
-            if can_access_client(current_user, client_id):
-                query = query.filter_by(client_id=client_id)
-            else:
-                flash("Нет доступа к выбранному сотруднику", "warning")
-                client_id = None
-
-        due_date_filter = (request.args.get("due_date") or "").strip()
-        if due_date_filter:
-            try:
-                query = query.filter_by(due_date=Validators.parse_due_date(due_date_filter))
-            except ValidationError:
-                flash("Некорректная дата фильтра, используйте YYYY-MM-DD", "warning")
-
-        priority_filter = (request.args.get("priority") or "").strip().lower()
-        if priority_filter in Priority.ALL:
-            query = query.filter_by(priority=priority_filter)
-        else:
-            priority_filter = ""
-
-        search_query = (request.args.get("q") or "").strip()
-        if search_query:
-            like = f"%{search_query}%"
-            query = query.filter(or_(Task.theme.ilike(like), Task.content.ilike(like)))
-
-        tasks = query.order_by(Task.due_date.asc(), Task.created_at.desc()).all()
-
-        return render_template(
-            "index.html",
-            tasks=tasks,
-            statuses=statuses,
-            priorities=priorities,
-            organizations=organizations,
-            clients=clients,
-            filters={
-                "status_id": status_id,
-                "organization_id": organization_id,
-                "client_id": client_id,
-                "due_date": due_date_filter,
-                "priority": priority_filter,
-                "q": search_query,
-            },
-        )
-
     @app.route("/tasks/create", methods=["GET", "POST"])
-    @login_required
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
     def create_task():
-        statuses = _ordered_statuses()
-        priorities = priority_choices()
-
-        if not statuses:
-            flash("Невозможно создать задачу без настроенных статусов", "danger")
-            return redirect(url_for("index"))
-
         selected_org_id = request.form.get("organization_id", type=int)
         if request.method == "GET":
             selected_org_id = request.args.get("organization_id", type=int)
-        if current_user.role == Roles.CLIENT:
-            selected_org_id = current_user.organization_id
 
         collections = _build_task_form_collections(current_user, selected_org_id)
-        organizations = collections["organizations"]
-        selected_org_id = collections["selected_org_id"]
-        clients = collections["clients"]
-        assignees = collections["assignees"]
-
-        if current_user.role == Roles.CLIENT and not selected_org_id:
-            flash("Ваш пользователь не привязан к организации. Обратитесь к администратору.", "danger")
-            return redirect(url_for("index"))
 
         if request.method == "POST":
-            require_organization = current_user.role != Roles.CLIENT
             try:
-                cleaned = Validators.task_payload(request.form, require_organization=require_organization)
+                cleaned = Validators.task_payload(request.form, require_organization=True)
             except ValidationError as exc:
                 flash(str(exc), "danger")
                 return render_template(
                     "task_form.html",
-                    clients=clients,
-                    assignees=assignees,
-                    organizations=organizations,
-                    clients_by_org=collections["clients_by_org"],
-                    assignees_by_org=collections["assignees_by_org"],
-                    task=None,
-                    priorities=priorities,
                     form_data=request.form,
+                    organizations=collections["organizations"],
+                    employees=collections["employees"],
+                    assignees=collections["assignees"],
+                    employees_by_org=collections["employees_by_org"],
+                    assignees_by_org=collections["assignees_by_org"],
+                    priorities=priority_choices(),
                 )
 
-            if current_user.role == Roles.CLIENT:
-                organization = current_user.organization
-                client = current_user
-            else:
-                organization = Organization.query.get(cleaned["organization_id"])
-                if not organization:
-                    flash("Выбранная организация не найдена", "danger")
-                    return render_template(
-                        "task_form.html",
-                        clients=clients,
-                        assignees=assignees,
-                        organizations=organizations,
-                        clients_by_org=collections["clients_by_org"],
-                        assignees_by_org=collections["assignees_by_org"],
-                        task=None,
-                        priorities=priorities,
-                        form_data=request.form,
-                    )
+            organization = Organization.query.get(cleaned["organization_id"])
+            if not organization:
+                flash("Организация не найдена", "danger")
+                return redirect(url_for("create_task"))
 
-                if not can_access_organization(current_user, organization.id):
-                    flash("Нет доступа к выбранной организации", "danger")
-                    return render_template(
-                        "task_form.html",
-                        clients=clients,
-                        assignees=assignees,
-                        organizations=organizations,
-                        clients_by_org=collections["clients_by_org"],
-                        assignees_by_org=collections["assignees_by_org"],
-                        task=None,
-                        priorities=priorities,
-                        form_data=request.form,
-                    )
+            if not can_access_organization(current_user, organization.id):
+                flash("Нет доступа к выбранной организации", "danger")
+                return redirect(url_for("create_task"))
 
-                client = None
-                if cleaned.get("client_id"):
-                    client = User.query.filter_by(
-                        id=cleaned["client_id"],
-                        role=Roles.CLIENT,
-                        active=True,
-                    ).first()
-                    if not client:
-                        flash("Выбранный сотрудник не найден", "danger")
-                        return render_template(
-                            "task_form.html",
-                            clients=clients,
-                            assignees=assignees,
-                            organizations=organizations,
-                            clients_by_org=collections["clients_by_org"],
-                            assignees_by_org=collections["assignees_by_org"],
-                            task=None,
-                            priorities=priorities,
-                            form_data=request.form,
-                        )
-                    if client.organization_id != organization.id:
-                        flash("Сотрудник не принадлежит выбранной организации", "danger")
-                        return render_template(
-                            "task_form.html",
-                            clients=clients,
-                            assignees=assignees,
-                            organizations=organizations,
-                            clients_by_org=collections["clients_by_org"],
-                            assignees_by_org=collections["assignees_by_org"],
-                            task=None,
-                            priorities=priorities,
-                            form_data=request.form,
-                        )
+            employee = None
+            if cleaned["employee_id"]:
+                employee = Employee.query.filter_by(
+                    id=cleaned["employee_id"],
+                    organization_id=organization.id,
+                    is_active=True,
+                ).first()
+                if not employee:
+                    flash("Сотрудник не найден или не принадлежит организации", "danger")
+                    return redirect(url_for("create_task", organization_id=organization.id))
 
             assignee, assignee_error = resolve_assignee(
                 current_user,
@@ -644,21 +799,11 @@ def create_app() -> Flask:
             )
             if assignee_error:
                 flash(assignee_error, "danger")
-                return render_template(
-                    "task_form.html",
-                    clients=clients,
-                    assignees=assignees,
-                    organizations=organizations,
-                    clients_by_org=collections["clients_by_org"],
-                    assignees_by_org=collections["assignees_by_org"],
-                    task=None,
-                    priorities=priorities,
-                    form_data=request.form,
-                )
+                return redirect(url_for("create_task", organization_id=organization.id))
 
             initial_status = _first_status()
             if not initial_status:
-                flash("Невозможно создать задачу без статуса", "danger")
+                flash("Сначала создайте хотя бы один статус", "danger")
                 return redirect(url_for("index"))
 
             task = Task(
@@ -667,7 +812,7 @@ def create_app() -> Flask:
                 due_date=cleaned["due_date"],
                 priority=cleaned["priority"],
                 organization=organization,
-                client=client,
+                employee=employee,
                 status=initial_status,
                 created_by=current_user,
                 assigned_to=assignee,
@@ -687,7 +832,7 @@ def create_app() -> Flask:
             record_task_change(task, current_user, "theme", None, task.theme)
             record_task_change(task, current_user, "content", None, task.content)
             record_task_change(task, current_user, "organization", None, task.organization.name)
-            record_task_change(task, current_user, "client", None, task.target_label)
+            record_task_change(task, current_user, "employee", None, task.target_label)
             record_task_change(task, current_user, "due_date", None, task.due_date)
             record_task_change(task, current_user, "priority", None, task.priority_label)
             record_task_change(
@@ -700,96 +845,100 @@ def create_app() -> Flask:
 
             db.session.commit()
 
-            notify_admins = bool(request.form.get("notify_admins", "on"))
-            notify_client = bool(request.form.get("notify_client", "on"))
+            task_url = url_for("task_detail", task_id=task.id, _external=True)
+            subject = f"[Helpdesk] Новая задача #{task.id}"
+            body = task_notification_text(task, task_url, "Создана новая задача")
 
-            recipients = []
-            if notify_admins:
-                recipients.extend(admin_users())
-            if notify_client and task.client:
-                recipients.append(task.client)
-            if task.assigned_to:
-                recipients.append(task.assigned_to)
+            recipients = collect_new_task_recipients(task)
+            notify_target = bool(request.form.get("notify_target"))
+            notify_admins = bool(request.form.get("notify_admins"))
 
-            if recipients:
-                task_url = url_for("task_detail", task_id=task.id, _external=True)
-                subject = f"[Helpdesk] Новая задача #{task.id}"
-                body = task_notification_text(task, task_url, "Создана новая задача")
-                dispatch_notifications(recipients, subject, body)
+            if not notify_target:
+                recipients = [r for r in recipients if not r.key.startswith("employee:") and not r.key.startswith("organization:")]
+            if not notify_admins:
+                admin_keys = {f"user:{user.id}" for user in admin_users()}
+                recipients = [r for r in recipients if r.key not in admin_keys]
 
-            flash("Задача успешно создана", "success")
+            dispatch_notifications(recipients, subject, body)
+
+            flash("Задача создана", "success")
             return redirect(url_for("task_detail", task_id=task.id))
 
-        default_form = {
-            "priority": Priority.MEDIUM,
+        form_data = {
+            "theme": "",
+            "content": "",
+            "due_date": "",
+            "priority": "medium",
+            "notify_target": "on",
             "notify_admins": "on",
-            "notify_client": "on",
-            "organization_id": str(selected_org_id) if selected_org_id else "",
-            "client_id": str(current_user.id) if current_user.role == Roles.CLIENT else "",
+            "organization_id": str(collections["selected_org_id"] or ""),
+            "employee_id": "",
+            "assigned_to_id": "",
         }
+
         return render_template(
             "task_form.html",
-            clients=clients,
-            assignees=assignees,
-            organizations=organizations,
-            clients_by_org=collections["clients_by_org"],
+            form_data=form_data,
+            organizations=collections["organizations"],
+            employees=collections["employees"],
+            assignees=collections["assignees"],
+            employees_by_org=collections["employees_by_org"],
             assignees_by_org=collections["assignees_by_org"],
-            task=None,
-            priorities=priorities,
-            form_data=default_form,
+            priorities=priority_choices(),
         )
 
     @app.route("/tasks/<int:task_id>")
-    @login_required
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
     def task_detail(task_id: int):
         task = Task.query.get_or_404(task_id)
         if not can_view_task(current_user, task):
             abort(403)
 
-        statuses = _ordered_statuses()
-        priorities = priority_choices()
+        can_edit = not task.archived
+        can_archive = not task.archived
+        can_restore = task.archived
 
         organizations = []
-        clients = []
+        employees = []
         assignees = []
-        clients_by_org = {}
+        employees_by_org = {}
         assignees_by_org = {}
 
-        can_operator_edit = current_user.role in (Roles.ADMIN, Roles.OPERATOR)
-        if can_operator_edit:
+        if can_edit:
             collections = _build_task_form_collections(current_user, task.organization_id)
             organizations = collections["organizations"]
-            clients = collections["clients"]
+            employees = collections["employees"]
             assignees = collections["assignees"]
-            clients_by_org = collections["clients_by_org"]
+            employees_by_org = collections["employees_by_org"]
             assignees_by_org = collections["assignees_by_org"]
 
         return render_template(
             "task.html",
             task=task,
-            statuses=statuses,
-            priorities=priorities,
+            statuses=_ordered_statuses(),
+            priorities=priority_choices(),
+            can_edit=can_edit,
+            can_archive=can_archive,
+            can_restore=can_restore,
+            can_change_status=can_edit,
+            can_comment=can_edit,
             organizations=organizations,
-            clients=clients,
+            employees=employees,
             assignees=assignees,
-            clients_by_org=clients_by_org,
+            employees_by_org=employees_by_org,
             assignees_by_org=assignees_by_org,
-            can_edit=can_operator_edit and not task.archived,
-            can_change_status=can_operator_edit and not task.archived,
-            can_archive=can_operator_edit and not task.archived,
-            can_restore=can_operator_edit and task.archived,
-            can_comment=not task.archived,
         )
 
     @app.route("/tasks/<int:task_id>/update", methods=["POST"])
     @roles_required(Roles.ADMIN, Roles.OPERATOR)
     def task_update(task_id: int):
         task = Task.query.get_or_404(task_id)
+        if task.archived:
+            flash("Архивную задачу нельзя редактировать", "warning")
+            return redirect(url_for("task_detail", task_id=task.id))
+
         if not can_view_task(current_user, task):
             abort(403)
-        if task.archived:
-            flash("Архивную задачу редактировать нельзя", "warning")
-            return redirect(url_for("task_detail", task_id=task.id))
 
         try:
             cleaned = Validators.task_payload(request.form, require_organization=True)
@@ -801,22 +950,20 @@ def create_app() -> Flask:
         if not organization:
             flash("Организация не найдена", "danger")
             return redirect(url_for("task_detail", task_id=task.id))
+
         if not can_access_organization(current_user, organization.id):
             flash("Нет доступа к выбранной организации", "danger")
             return redirect(url_for("task_detail", task_id=task.id))
 
-        client = None
-        if cleaned.get("client_id"):
-            client = User.query.filter_by(
-                id=cleaned["client_id"],
-                role=Roles.CLIENT,
-                active=True,
+        employee = None
+        if cleaned["employee_id"]:
+            employee = Employee.query.filter_by(
+                id=cleaned["employee_id"],
+                organization_id=organization.id,
+                is_active=True,
             ).first()
-            if not client:
-                flash("Сотрудник не найден", "danger")
-                return redirect(url_for("task_detail", task_id=task.id))
-            if client.organization_id != organization.id:
-                flash("Сотрудник должен принадлежать выбранной организации", "danger")
+            if not employee:
+                flash("Сотрудник не найден или не принадлежит организации", "danger")
                 return redirect(url_for("task_detail", task_id=task.id))
 
         assignee, assignee_error = resolve_assignee(
@@ -831,23 +978,23 @@ def create_app() -> Flask:
         old_theme = task.theme
         old_content = task.content
         old_organization = task.organization.name if task.organization else "-"
-        old_client = task.target_label
+        old_target = task.target_label
         old_due_date = task.due_date
         old_priority = task.priority_label
         old_assignee = task.assigned_to.username if task.assigned_to else "-"
 
         task.theme = cleaned["theme"]
         task.content = cleaned["content"]
-        task.organization = organization
-        task.client = client
         task.due_date = cleaned["due_date"]
         task.priority = cleaned["priority"]
+        task.organization = organization
+        task.employee = employee
         task.assigned_to = assignee
 
         record_task_change(task, current_user, "theme", old_theme, task.theme)
         record_task_change(task, current_user, "content", old_content, task.content)
         record_task_change(task, current_user, "organization", old_organization, task.organization.name)
-        record_task_change(task, current_user, "client", old_client, task.target_label)
+        record_task_change(task, current_user, "employee", old_target, task.target_label)
         record_task_change(task, current_user, "due_date", old_due_date, task.due_date)
         record_task_change(task, current_user, "priority", old_priority, task.priority_label)
         record_task_change(
@@ -859,7 +1006,6 @@ def create_app() -> Flask:
         )
 
         db.session.commit()
-
         flash("Задача обновлена", "success")
         return redirect(url_for("task_detail", task_id=task.id))
 
@@ -870,40 +1016,79 @@ def create_app() -> Flask:
         if not can_view_task(current_user, task):
             abort(403)
         if task.archived:
-            flash("Архивную задачу нельзя перевести в другой статус", "warning")
+            flash("Архивную задачу нельзя менять", "warning")
             return redirect(url_for("task_detail", task_id=task.id))
 
-        status_id = request.form.get("status_id", type=int)
-        new_status = Status.query.get(status_id) if status_id else None
+        try:
+            status_id = Validators.parse_required_int(request.form.get("status_id"), "status_id")
+        except ValidationError as exc:
+            flash(str(exc), "danger")
+            return redirect(url_for("task_detail", task_id=task.id))
+
+        new_status = Status.query.get(status_id)
         if not new_status:
             flash("Статус не найден", "danger")
             return redirect(url_for("task_detail", task_id=task.id))
 
-        if new_status.id == task.status_id:
-            flash("Статус уже установлен", "info")
+        old_status = task.status
+        if old_status.id == new_status.id:
+            flash("Статус не изменился", "info")
             return redirect(_safe_next_url(url_for("task_detail", task_id=task.id)))
 
-        old_status_name = task.status.name
-        previous_status_id = task.status_id
         task.status = new_status
-
         db.session.add(
             StatusHistory(
                 task=task,
-                old_status_id=previous_status_id,
+                old_status_id=old_status.id,
                 new_status_id=new_status.id,
                 changed_by=current_user,
             )
         )
-        record_task_change(task, current_user, "status", old_status_name, new_status.name)
-
+        record_task_change(task, current_user, "status", old_status.name, new_status.name)
         db.session.commit()
 
-        flash("Статус задачи обновлён", "success")
+        flash("Статус обновлён", "success")
         return redirect(_safe_next_url(url_for("task_detail", task_id=task.id)))
 
+    @app.route("/tasks/<int:task_id>/move-status", methods=["POST"])
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
+    def move_status(task_id: int):
+        task = Task.query.get_or_404(task_id)
+        if not can_view_task(current_user, task):
+            return jsonify({"error": "Forbidden"}), 403
+        if task.archived:
+            return jsonify({"error": "Archived task cannot be moved"}), 400
+
+        payload = request.get_json(silent=True) or {}
+        try:
+            status_id = Validators.parse_required_int(payload.get("status_id"), "status_id")
+        except ValidationError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        new_status = Status.query.get(status_id)
+        if not new_status:
+            return jsonify({"error": "Status not found"}), 404
+
+        old_status = task.status
+        if old_status.id == new_status.id:
+            return jsonify({"ok": True, "status": old_status.name})
+
+        task.status = new_status
+        db.session.add(
+            StatusHistory(
+                task=task,
+                old_status_id=old_status.id,
+                new_status_id=new_status.id,
+                changed_by=current_user,
+            )
+        )
+        record_task_change(task, current_user, "status", old_status.name, new_status.name)
+        db.session.commit()
+
+        return jsonify({"ok": True, "status": new_status.name})
+
     @app.route("/tasks/<int:task_id>/comments", methods=["POST"])
-    @login_required
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
     def add_comment(task_id: int):
         task = Task.query.get_or_404(task_id)
         if not can_view_task(current_user, task):
@@ -920,20 +1105,12 @@ def create_app() -> Flask:
 
         comment = TaskComment(task=task, author=current_user, content=cleaned["content"])
         db.session.add(comment)
-        db.session.flush()
-
-        preview = cleaned["content"]
-        if len(preview) > 80:
-            preview = preview[:80] + "..."
-        record_task_change(task, current_user, "comment", None, f"[{current_user.username}] {preview}")
-
         db.session.commit()
 
         task_url = url_for("task_detail", task_id=task.id, _external=True)
         subject = f"[Helpdesk] Новый комментарий к задаче #{task.id}"
         body = comment_notification_text(comment, task_url, "Добавлен комментарий")
-        recipients = collect_comment_recipients(task, current_user)
-        dispatch_notifications(recipients, subject, body)
+        dispatch_notifications(collect_comment_recipients(task, current_user), subject, body)
 
         flash("Комментарий добавлен", "success")
         return redirect(url_for("task_detail", task_id=task.id))
@@ -944,17 +1121,14 @@ def create_app() -> Flask:
         task = Task.query.get_or_404(task_id)
         if not can_view_task(current_user, task):
             abort(403)
-        if task.archived:
-            flash("Задача уже находится в архиве", "info")
-            return redirect(url_for("task_detail", task_id=task.id))
 
-        task.archived = True
-        task.archived_at = datetime.utcnow()
-        record_task_change(task, current_user, "archived", "false", "true")
-        db.session.commit()
-
-        flash("Задача перемещена в архив", "success")
-        return redirect(url_for("archive"))
+        if not task.archived:
+            task.archived = True
+            task.archived_at = datetime.utcnow()
+            record_task_change(task, current_user, "archived", "false", "true")
+            db.session.commit()
+            flash("Задача отправлена в архив", "success")
+        return redirect(url_for("task_detail", task_id=task.id))
 
     @app.route("/tasks/<int:task_id>/restore", methods=["POST"])
     @roles_required(Roles.ADMIN, Roles.OPERATOR)
@@ -962,86 +1136,41 @@ def create_app() -> Flask:
         task = Task.query.get_or_404(task_id)
         if not can_view_task(current_user, task):
             abort(403)
-        if not task.archived:
-            flash("Задача уже активна", "info")
-            return redirect(url_for("task_detail", task_id=task.id))
 
-        task.archived = False
-        task.archived_at = None
-        record_task_change(task, current_user, "archived", "true", "false")
-        db.session.commit()
-
-        flash("Задача восстановлена из архива", "success")
+        if task.archived:
+            task.archived = False
+            task.archived_at = None
+            record_task_change(task, current_user, "archived", "true", "false")
+            db.session.commit()
+            flash("Задача восстановлена", "success")
         return redirect(url_for("task_detail", task_id=task.id))
 
     @app.route("/archive")
-    @login_required
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
     def archive():
-        query = Task.query.filter_by(archived=True)
-        query = filter_tasks_for_user(query, current_user)
+        query = Task.query.filter(Task.archived.is_(True))
+        query, statuses, organizations, employees, filters = _apply_task_filters(query)
 
-        statuses = _ordered_statuses()
-        organizations = []
-        clients = []
-
-        status_id = request.args.get("status_id", type=int)
-        if status_id:
-            query = query.filter_by(status_id=status_id)
-
-        if current_user.role in (Roles.ADMIN, Roles.OPERATOR):
-            organizations = allowed_organizations_for_user(current_user)
-
-        organization_id = request.args.get("organization_id", type=int)
-        if organization_id:
-            if can_access_organization(current_user, organization_id):
-                query = query.filter_by(organization_id=organization_id)
-            else:
-                flash("Нет доступа к выбранной организации", "warning")
-                organization_id = None
-
-        if current_user.role in (Roles.ADMIN, Roles.OPERATOR):
-            clients = allowed_clients_for_user(current_user, organization_id)
-
-        client_id = request.args.get("client_id", type=int)
-        if client_id:
-            if can_access_client(current_user, client_id):
-                query = query.filter_by(client_id=client_id)
-            else:
-                flash("Нет доступа к выбранному сотруднику", "warning")
-                client_id = None
-
-        priority_filter = (request.args.get("priority") or "").strip().lower()
-        if priority_filter in Priority.ALL:
-            query = query.filter_by(priority=priority_filter)
-        else:
-            priority_filter = ""
-
-        tasks = query.order_by(Task.archived_at.desc().nullslast(), Task.id.desc()).all()
+        tasks = query.order_by(Task.archived_at.desc(), Task.id.desc()).all()
 
         return render_template(
             "archive.html",
             tasks=tasks,
             statuses=statuses,
             organizations=organizations,
-            clients=clients,
-            filters={
-                "status_id": status_id,
-                "organization_id": organization_id,
-                "client_id": client_id,
-                "priority": priority_filter,
-            },
+            employees=employees,
             priorities=priority_choices(),
+            filters=filters,
         )
 
     @app.route("/kanban")
-    @login_required
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
     def kanban():
         statuses = _ordered_statuses()
-        query = Task.query.filter_by(archived=False)
-        query = filter_tasks_for_user(query, current_user)
+        query = Task.query.filter(Task.archived.is_(False))
+        tasks = filter_tasks_for_user(query, current_user).order_by(Task.created_at.desc()).all()
 
-        tasks = query.order_by(Task.due_date.asc(), Task.created_at.desc()).all()
-        columns = {status.id: [] for status in statuses}
+        columns: dict[int, list[Task]] = {status.id: [] for status in statuses}
         for task in tasks:
             columns.setdefault(task.status_id, []).append(task)
 
@@ -1049,230 +1178,89 @@ def create_app() -> Flask:
             "kanban.html",
             statuses=statuses,
             columns=columns,
-            can_drag=current_user.role in (Roles.ADMIN, Roles.OPERATOR),
+            can_drag=True,
         )
-
-    @app.route("/tasks/<int:task_id>/move-status", methods=["POST"])
-    @login_required
-    def move_status(task_id: int):
-        if current_user.role not in (Roles.ADMIN, Roles.OPERATOR):
-            return jsonify({"error": "forbidden"}), 403
-
-        task = Task.query.get_or_404(task_id)
-        if not can_view_task(current_user, task):
-            return jsonify({"error": "forbidden"}), 403
-        if task.archived:
-            return jsonify({"error": "archived_task"}), 400
-
-        payload = request.get_json(silent=True) or {}
-        status_id = payload.get("status_id")
-        try:
-            status_id = int(status_id)
-        except (TypeError, ValueError):
-            return jsonify({"error": "invalid_status_id"}), 400
-
-        new_status = Status.query.get(status_id)
-        if not new_status:
-            return jsonify({"error": "status_not_found"}), 404
-
-        if new_status.id == task.status_id:
-            return jsonify({"ok": True, "task_id": task.id, "status": new_status.name})
-
-        old_status_id = task.status_id
-        old_status_name = task.status.name
-
-        task.status = new_status
-        db.session.add(
-            StatusHistory(
-                task=task,
-                old_status_id=old_status_id,
-                new_status_id=new_status.id,
-                changed_by=current_user,
-            )
-        )
-        record_task_change(task, current_user, "status", old_status_name, new_status.name)
-        db.session.commit()
-
-        return jsonify({"ok": True, "task_id": task.id, "status": new_status.name})
 
     @app.route("/users")
     @roles_required(Roles.ADMIN)
     def users():
-        users_list = User.query.order_by(User.created_at.desc()).all()
+        users_list = (
+            User.query.filter(User.role.in_(Roles.INTERNAL))
+            .order_by(User.created_at.desc(), User.id.desc())
+            .all()
+        )
         return render_template("users.html", users=users_list)
 
     @app.route("/users/create", methods=["GET", "POST"])
     @roles_required(Roles.ADMIN)
     def user_create():
-        organizations = Organization.query.order_by(Organization.name.asc()).all()
-
         if request.method == "POST":
             try:
                 cleaned = Validators.user_payload(request.form, password_required=True)
             except ValidationError as exc:
                 flash(str(exc), "danger")
-                return render_template(
-                    "user_form.html",
-                    user=None,
-                    organizations=organizations,
-                    form_data=request.form,
-                )
+                return render_template("user_form.html", user=None, form_data=request.form)
 
             if User.query.filter_by(username=cleaned["username"]).first():
                 flash("Пользователь с таким логином уже существует", "danger")
-                return render_template(
-                    "user_form.html",
-                    user=None,
-                    organizations=organizations,
-                    form_data=request.form,
-                )
-
-            organization = None
-            if cleaned["role"] == Roles.CLIENT:
-                organization = Organization.query.get(cleaned["organization_id"])
-                if not organization:
-                    flash("Выбранная организация не найдена", "danger")
-                    return render_template(
-                        "user_form.html",
-                        user=None,
-                        organizations=organizations,
-                        form_data=request.form,
-                    )
+                return render_template("user_form.html", user=None, form_data=request.form)
 
             user = User(
                 username=cleaned["username"],
                 role=cleaned["role"],
                 email=cleaned["email"],
                 telegram_chat_id=cleaned["telegram_chat_id"],
-                organization=organization,
                 active=bool(request.form.get("active")),
                 must_change_password=bool(request.form.get("must_change_password")),
             )
             user.set_password(cleaned["password"])
+
             db.session.add(user)
-
-            generated_token = None
-            if user.role == Roles.CLIENT and request.form.get("create_token"):
-                _, generated_token = ApiToken.create_for_user(user)
-
             db.session.commit()
+
             flash("Пользователь создан", "success")
-            if generated_token:
-                flash(f"API токен клиента (показывается один раз): {generated_token}", "warning")
             return redirect(url_for("users"))
 
-        default_form = {
-            "role": Roles.CLIENT,
+        form_data = {
+            "username": "",
+            "role": Roles.OPERATOR,
+            "email": "",
+            "telegram_chat_id": "",
             "active": "on",
-            "organization_id": str(request.args.get("organization_id", type=int) or ""),
+            "must_change_password": "",
         }
-        return render_template(
-            "user_form.html",
-            user=None,
-            organizations=organizations,
-            form_data=default_form,
-        )
+        return render_template("user_form.html", user=None, form_data=form_data)
 
     @app.route("/users/<int:user_id>/edit", methods=["GET", "POST"])
     @roles_required(Roles.ADMIN)
     def user_edit(user_id: int):
         user = User.query.get_or_404(user_id)
-        organizations = Organization.query.order_by(Organization.name.asc()).all()
 
         if request.method == "POST":
             try:
                 cleaned = Validators.user_payload(request.form, password_required=False)
             except ValidationError as exc:
                 flash(str(exc), "danger")
-                return render_template(
-                    "user_form.html",
-                    user=user,
-                    organizations=organizations,
-                    form_data=request.form,
-                )
+                return render_template("user_form.html", user=user, form_data=request.form)
 
-            existing = User.query.filter_by(username=cleaned["username"]).first()
-            if existing and existing.id != user.id:
+            duplicate = User.query.filter(User.username == cleaned["username"], User.id != user.id).first()
+            if duplicate:
                 flash("Логин уже занят", "danger")
-                return render_template(
-                    "user_form.html",
-                    user=user,
-                    organizations=organizations,
-                    form_data=request.form,
-                )
+                return render_template("user_form.html", user=user, form_data=request.form)
 
-            new_role = cleaned["role"]
-            new_active = bool(request.form.get("active"))
+            next_role = cleaned["role"]
+            next_active = bool(request.form.get("active"))
 
-            if user.id == current_user.id and not new_active:
-                flash("Нельзя деактивировать самого себя", "danger")
-                return render_template(
-                    "user_form.html",
-                    user=user,
-                    organizations=organizations,
-                    form_data=request.form,
-                )
-
-            if user.role == Roles.ADMIN and (new_role != Roles.ADMIN or not new_active):
+            if user.role == Roles.ADMIN and (next_role != Roles.ADMIN or not next_active):
                 if _active_admins_count(exclude_user_id=user.id) == 0:
                     flash("В системе должен оставаться хотя бы один активный администратор", "danger")
-                    return render_template(
-                        "user_form.html",
-                        user=user,
-                        organizations=organizations,
-                        form_data=request.form,
-                    )
-
-            if user.role == Roles.CLIENT and new_role != Roles.CLIENT:
-                if Task.query.filter_by(client_id=user.id).count() > 0:
-                    flash(
-                        "Нельзя изменить роль клиента, пока за ним закреплены задачи. "
-                        "Сначала переназначьте задачи.",
-                        "danger",
-                    )
-                    return render_template(
-                        "user_form.html",
-                        user=user,
-                        organizations=organizations,
-                        form_data=request.form,
-                    )
-
-            organization = None
-            if new_role == Roles.CLIENT:
-                organization = Organization.query.get(cleaned["organization_id"])
-                if not organization:
-                    flash("Выбранная организация не найдена", "danger")
-                    return render_template(
-                        "user_form.html",
-                        user=user,
-                        organizations=organizations,
-                        form_data=request.form,
-                    )
-
-                if user.role == Roles.CLIENT and user.organization_id != organization.id:
-                    active_tasks_count = Task.query.filter_by(client_id=user.id, archived=False).count()
-                    if active_tasks_count > 0:
-                        flash(
-                            "Нельзя сменить организацию клиента, пока у него есть активные задачи. "
-                            "Сначала закройте или переназначьте их.",
-                            "danger",
-                        )
-                        return render_template(
-                            "user_form.html",
-                            user=user,
-                            organizations=organizations,
-                            form_data=request.form,
-                        )
-
-            if user.role == Roles.OPERATOR and new_role != Roles.OPERATOR:
-                OperatorOrganizationAccess.query.filter_by(operator_id=user.id).delete(synchronize_session=False)
+                    return render_template("user_form.html", user=user, form_data=request.form)
 
             user.username = cleaned["username"]
-            user.role = new_role
+            user.role = next_role
             user.email = cleaned["email"]
             user.telegram_chat_id = cleaned["telegram_chat_id"]
-            user.organization = organization
-            user.active = new_active
+            user.active = next_active
             user.must_change_password = bool(request.form.get("must_change_password"))
 
             if cleaned.get("password"):
@@ -1287,124 +1275,134 @@ def create_app() -> Flask:
             "role": user.role,
             "email": user.email or "",
             "telegram_chat_id": user.telegram_chat_id or "",
-            "organization_id": str(user.organization_id or ""),
             "active": "on" if user.active else "",
             "must_change_password": "on" if user.must_change_password else "",
         }
-        return render_template(
-            "user_form.html",
-            user=user,
-            organizations=organizations,
-            form_data=form_data,
-        )
-
-    @app.route("/users/<int:user_id>/tokens/new", methods=["POST"])
-    @roles_required(Roles.ADMIN)
-    def user_new_token(user_id: int):
-        user = User.query.get_or_404(user_id)
-        if user.role != Roles.CLIENT:
-            flash("Токены можно создавать только для клиентов", "danger")
-            return redirect(url_for("users"))
-
-        _, raw_token = ApiToken.create_for_user(user)
-        db.session.commit()
-        flash("Новый API токен сгенерирован", "success")
-        flash(f"Токен (показывается один раз): {raw_token}", "warning")
-        return redirect(url_for("users"))
-
-    @app.route("/users/<int:user_id>/tokens/<int:token_id>/revoke", methods=["POST"])
-    @roles_required(Roles.ADMIN)
-    def revoke_token(user_id: int, token_id: int):
-        token = ApiToken.query.filter_by(id=token_id, user_id=user_id).first_or_404()
-        token.revoked = True
-        db.session.commit()
-        flash("Токен отозван", "success")
-        return redirect(url_for("users"))
+        return render_template("user_form.html", user=user, form_data=form_data)
 
     @app.route("/organizations")
-    @roles_required(Roles.ADMIN)
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
     def organizations():
-        orgs = Organization.query.order_by(Organization.name.asc()).all()
+        query = Organization.query.order_by(Organization.name.asc())
+
+        if current_user.role == Roles.OPERATOR:
+            org_ids = {org.id for org in allowed_organizations_for_user(current_user)}
+            if not org_ids:
+                orgs = []
+            else:
+                orgs = query.filter(Organization.id.in_(org_ids)).all()
+        else:
+            orgs = query.all()
+
         return render_template("organizations.html", organizations=orgs)
 
     @app.route("/organizations/create", methods=["GET", "POST"])
     @roles_required(Roles.ADMIN)
     def organization_create():
         if request.method == "POST":
-            name = (request.form.get("name") or "").strip()
-            description = (request.form.get("description") or "").strip()
+            try:
+                cleaned = Validators.organization_payload(request.form)
+            except ValidationError as exc:
+                flash(str(exc), "danger")
+                return render_template("organization_form.html", organization=None, form_data=request.form, employees=[])
 
-            if not name:
-                flash("Название организации обязательно", "danger")
-                return render_template("organization_form.html", organization=None, form_data=request.form)
-
-            existing = Organization.query.filter_by(name=name).first()
-            if existing:
+            duplicate = Organization.query.filter_by(name=cleaned["name"]).first()
+            if duplicate:
                 flash("Организация с таким названием уже существует", "danger")
-                return render_template("organization_form.html", organization=None, form_data=request.form)
+                return render_template("organization_form.html", organization=None, form_data=request.form, employees=[])
 
-            organization = Organization(name=name, description=description or None)
+            organization = Organization(**cleaned)
+            if request.form.get("generate_token"):
+                raw_token = organization.generate_api_token()
+                flash(f"API-токен создан: {raw_token}", "warning")
+
             db.session.add(organization)
             db.session.commit()
 
             flash("Организация создана", "success")
             return redirect(url_for("organizations"))
 
-        return render_template(
-            "organization_form.html",
-            organization=None,
-            form_data={"name": "", "description": ""},
-        )
+        form_data = {
+            "name": "",
+            "description": "",
+            "address": "",
+            "inn": "",
+            "kpp": "",
+            "bank_details": "",
+            "phone": "",
+            "email": "",
+            "website": "",
+            "generate_token": "on",
+        }
+        return render_template("organization_form.html", organization=None, form_data=form_data, employees=[])
 
     @app.route("/organizations/<int:organization_id>/edit", methods=["GET", "POST"])
     @roles_required(Roles.ADMIN)
     def organization_edit(organization_id: int):
         organization = Organization.query.get_or_404(organization_id)
-        clients = (
-            User.query.filter_by(role=Roles.CLIENT, organization_id=organization.id)
-            .order_by(User.username.asc())
-            .all()
-        )
 
         if request.method == "POST":
-            name = (request.form.get("name") or "").strip()
-            description = (request.form.get("description") or "").strip()
-
-            if not name:
-                flash("Название организации обязательно", "danger")
+            try:
+                cleaned = Validators.organization_payload(request.form)
+            except ValidationError as exc:
+                flash(str(exc), "danger")
+                employees = (
+                    Employee.query.filter_by(organization_id=organization.id)
+                    .order_by(Employee.last_name.asc(), Employee.first_name.asc())
+                    .all()
+                )
                 return render_template(
                     "organization_form.html",
                     organization=organization,
-                    clients=clients,
                     form_data=request.form,
+                    employees=employees,
                 )
 
-            duplicate = Organization.query.filter_by(name=name).first()
-            if duplicate and duplicate.id != organization.id:
+            duplicate = Organization.query.filter(Organization.name == cleaned["name"], Organization.id != organization.id).first()
+            if duplicate:
                 flash("Организация с таким названием уже существует", "danger")
+                employees = (
+                    Employee.query.filter_by(organization_id=organization.id)
+                    .order_by(Employee.last_name.asc(), Employee.first_name.asc())
+                    .all()
+                )
                 return render_template(
                     "organization_form.html",
                     organization=organization,
-                    clients=clients,
                     form_data=request.form,
+                    employees=employees,
                 )
 
-            organization.name = name
-            organization.description = description or None
-            db.session.commit()
+            for key, value in cleaned.items():
+                setattr(organization, key, value)
 
+            db.session.commit()
             flash("Организация обновлена", "success")
-            return redirect(url_for("organizations"))
+            return redirect(url_for("organization_edit", organization_id=organization.id))
+
+        employees = (
+            Employee.query.filter_by(organization_id=organization.id)
+            .order_by(Employee.last_name.asc(), Employee.first_name.asc())
+            .all()
+        )
 
         form_data = {
             "name": organization.name,
             "description": organization.description or "",
+            "address": organization.address or "",
+            "inn": organization.inn or "",
+            "kpp": organization.kpp or "",
+            "bank_details": organization.bank_details or "",
+            "phone": organization.phone or "",
+            "email": organization.email or "",
+            "website": organization.website or "",
         }
+
         return render_template(
             "organization_form.html",
             organization=organization,
-            clients=clients,
             form_data=form_data,
+            employees=employees,
         )
 
     @app.route("/organizations/<int:organization_id>/delete", methods=["POST"])
@@ -1412,8 +1410,8 @@ def create_app() -> Flask:
     def organization_delete(organization_id: int):
         organization = Organization.query.get_or_404(organization_id)
 
-        if organization.users.count() > 0:
-            flash("Нельзя удалить организацию: есть связанные пользователи", "danger")
+        if organization.employees.count() > 0:
+            flash("Нельзя удалить организацию: есть связанные сотрудники", "danger")
             return redirect(url_for("organizations"))
 
         if organization.tasks.count() > 0:
@@ -1422,9 +1420,176 @@ def create_app() -> Flask:
 
         db.session.delete(organization)
         db.session.commit()
-
         flash("Организация удалена", "success")
         return redirect(url_for("organizations"))
+
+    @app.route("/organizations/<int:organization_id>/token/new", methods=["POST"])
+    @roles_required(Roles.ADMIN)
+    def organization_new_token(organization_id: int):
+        organization = Organization.query.get_or_404(organization_id)
+        raw_token = organization.generate_api_token()
+        db.session.commit()
+        flash(f"Новый API-токен: {raw_token}", "warning")
+        return redirect(url_for("organization_edit", organization_id=organization.id))
+
+    @app.route("/employees")
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
+    def employees():
+        organizations = allowed_organizations_for_user(current_user)
+        organization_id = request.args.get("organization_id", type=int)
+
+        query = Employee.query.filter_by(is_active=True)
+        if current_user.role == Roles.OPERATOR:
+            org_ids = {org.id for org in organizations}
+            if not org_ids:
+                query = query.filter(text("1=0"))
+            else:
+                query = query.filter(Employee.organization_id.in_(org_ids))
+
+        if organization_id:
+            if current_user.role == Roles.ADMIN or can_access_organization(current_user, organization_id):
+                query = query.filter_by(organization_id=organization_id)
+            else:
+                flash("Нет доступа к выбранной организации", "warning")
+                organization_id = None
+
+        employees_list = query.order_by(Employee.last_name.asc(), Employee.first_name.asc(), Employee.id.asc()).all()
+
+        return render_template(
+            "employees.html",
+            employees=employees_list,
+            organizations=organizations,
+            filters={"organization_id": organization_id},
+        )
+
+    @app.route("/employees/create", methods=["GET", "POST"])
+    @roles_required(Roles.ADMIN)
+    def employee_create():
+        organizations = Organization.query.order_by(Organization.name.asc()).all()
+
+        if request.method == "POST":
+            try:
+                cleaned = Validators.employee_payload(request.form)
+            except ValidationError as exc:
+                flash(str(exc), "danger")
+                return render_template(
+                    "employee_form.html",
+                    employee=None,
+                    organizations=organizations,
+                    form_data=request.form,
+                )
+
+            organization = Organization.query.get(cleaned["organization_id"])
+            if not organization:
+                flash("Организация не найдена", "danger")
+                return render_template(
+                    "employee_form.html",
+                    employee=None,
+                    organizations=organizations,
+                    form_data=request.form,
+                )
+
+            employee = Employee(**cleaned)
+            db.session.add(employee)
+            db.session.commit()
+            flash("Сотрудник создан", "success")
+            return redirect(url_for("employees", organization_id=employee.organization_id))
+
+        form_data = {
+            "first_name": "",
+            "last_name": "",
+            "position": "",
+            "email": "",
+            "phone": "",
+            "telegram": "",
+            "organization_id": str(request.args.get("organization_id", type=int) or ""),
+            "is_active": "on",
+        }
+        return render_template(
+            "employee_form.html",
+            employee=None,
+            organizations=organizations,
+            form_data=form_data,
+        )
+
+    @app.route("/employees/<int:employee_id>/edit", methods=["GET", "POST"])
+    @roles_required(Roles.ADMIN)
+    def employee_edit(employee_id: int):
+        employee = Employee.query.get_or_404(employee_id)
+        organizations = Organization.query.order_by(Organization.name.asc()).all()
+
+        if request.method == "POST":
+            try:
+                cleaned = Validators.employee_payload(request.form)
+            except ValidationError as exc:
+                flash(str(exc), "danger")
+                return render_template(
+                    "employee_form.html",
+                    employee=employee,
+                    organizations=organizations,
+                    form_data=request.form,
+                )
+
+            organization = Organization.query.get(cleaned["organization_id"])
+            if not organization:
+                flash("Организация не найдена", "danger")
+                return render_template(
+                    "employee_form.html",
+                    employee=employee,
+                    organizations=organizations,
+                    form_data=request.form,
+                )
+
+            if employee.organization_id != organization.id:
+                active_tasks = Task.query.filter_by(employee_id=employee.id, archived=False).count()
+                if active_tasks > 0:
+                    flash(
+                        "Нельзя сменить организацию сотрудника, пока есть активные задачи. Переназначьте задачи сначала.",
+                        "danger",
+                    )
+                    return render_template(
+                        "employee_form.html",
+                        employee=employee,
+                        organizations=organizations,
+                        form_data=request.form,
+                    )
+
+            for key, value in cleaned.items():
+                setattr(employee, key, value)
+
+            db.session.commit()
+            flash("Сотрудник обновлён", "success")
+            return redirect(url_for("employees", organization_id=employee.organization_id))
+
+        form_data = {
+            "first_name": employee.first_name,
+            "last_name": employee.last_name or "",
+            "position": employee.position or "",
+            "email": employee.email,
+            "phone": employee.phone or "",
+            "telegram": employee.telegram or "",
+            "organization_id": str(employee.organization_id),
+            "is_active": "on" if employee.is_active else "",
+        }
+        return render_template(
+            "employee_form.html",
+            employee=employee,
+            organizations=organizations,
+            form_data=form_data,
+        )
+
+    @app.route("/employees/<int:employee_id>/delete", methods=["POST"])
+    @roles_required(Roles.ADMIN)
+    def employee_delete(employee_id: int):
+        employee = Employee.query.get_or_404(employee_id)
+        if Task.query.filter_by(employee_id=employee.id).count() > 0:
+            flash("Нельзя удалить сотрудника: есть связанные задачи", "danger")
+            return redirect(url_for("employees", organization_id=employee.organization_id))
+
+        db.session.delete(employee)
+        db.session.commit()
+        flash("Сотрудник удалён", "success")
+        return redirect(url_for("employees"))
 
     @app.route("/access")
     @roles_required(Roles.ADMIN)
@@ -1432,9 +1597,8 @@ def create_app() -> Flask:
         operators = User.query.filter_by(role=Roles.OPERATOR).order_by(User.username.asc()).all()
         organizations = Organization.query.order_by(Organization.name.asc()).all()
 
-        access_rows = OperatorOrganizationAccess.query.all()
         access_map: dict[int, set[int]] = {}
-        for row in access_rows:
+        for row in OperatorOrganizationAccess.query.all():
             access_map.setdefault(row.operator_id, set()).add(row.organization_id)
 
         return render_template(
@@ -1449,53 +1613,55 @@ def create_app() -> Flask:
     def access_update(operator_id: int):
         operator = User.query.filter_by(id=operator_id, role=Roles.OPERATOR).first_or_404()
 
-        selected_raw = request.form.getlist("organization_ids")
         selected_ids: set[int] = set()
-        for value in selected_raw:
+        for raw in request.form.getlist("organization_ids"):
             try:
-                selected_ids.add(int(value))
+                selected_ids.add(int(raw))
             except ValueError:
                 continue
 
-        valid_organization_ids = {
+        valid_ids = {
             row[0]
             for row in Organization.query.with_entities(Organization.id).all()
         }
-        selected_ids &= valid_organization_ids
+        selected_ids &= valid_ids
 
         OperatorOrganizationAccess.query.filter_by(operator_id=operator.id).delete(synchronize_session=False)
-        for organization_id in selected_ids:
+        for org_id in selected_ids:
             db.session.add(
                 OperatorOrganizationAccess(
                     operator_id=operator.id,
-                    organization_id=organization_id,
+                    organization_id=org_id,
                 )
             )
 
         db.session.commit()
-        flash(f"Права доступа обновлены для оператора {operator.username}", "success")
+        flash(f"Доступы оператора {operator.username} обновлены", "success")
         return redirect(url_for("access_management"))
 
     @app.route("/statuses")
     @roles_required(Roles.ADMIN)
     def statuses():
-        statuses_list = _ordered_statuses()
-        return render_template("statuses.html", statuses=statuses_list)
+        return render_template("statuses.html", statuses=_ordered_statuses())
+
+    @app.route("/priorities")
+    @roles_required(Roles.ADMIN, Roles.OPERATOR)
+    def priorities():
+        return render_template("priorities.html", priorities=priority_choices())
 
     @app.route("/statuses/create", methods=["POST"])
     @roles_required(Roles.ADMIN)
     def status_create():
         name = (request.form.get("name") or "").strip()
-        sort_order_raw = (request.form.get("sort_order") or "").strip()
-
         if not name:
             flash("Название статуса обязательно", "danger")
             return redirect(url_for("statuses"))
 
         if Status.query.filter_by(name=name).first():
-            flash("Такой статус уже существует", "danger")
+            flash("Статус с таким названием уже существует", "danger")
             return redirect(url_for("statuses"))
 
+        sort_order_raw = (request.form.get("sort_order") or "").strip()
         if sort_order_raw:
             try:
                 sort_order = int(sort_order_raw)
@@ -1506,16 +1672,21 @@ def create_app() -> Flask:
             last_status = Status.query.order_by(Status.sort_order.desc(), Status.id.desc()).first()
             sort_order = (last_status.sort_order + 10) if last_status else 10
 
-        db.session.add(Status(name=name, sort_order=sort_order))
+        status = Status(
+            name=name,
+            sort_order=sort_order,
+            is_final=bool(request.form.get("is_final")),
+        )
+        db.session.add(status)
         db.session.commit()
-
-        flash("Статус добавлен", "success")
+        flash("Статус создан", "success")
         return redirect(url_for("statuses"))
 
     @app.route("/statuses/<int:status_id>/update", methods=["POST"])
     @roles_required(Roles.ADMIN)
     def status_update(status_id: int):
         status = Status.query.get_or_404(status_id)
+
         name = (request.form.get("name") or "").strip()
         sort_order_raw = (request.form.get("sort_order") or "").strip()
 
@@ -1523,9 +1694,9 @@ def create_app() -> Flask:
             flash("Название статуса обязательно", "danger")
             return redirect(url_for("statuses"))
 
-        duplicate = Status.query.filter_by(name=name).first()
-        if duplicate and duplicate.id != status.id:
-            flash("Статус с таким именем уже существует", "danger")
+        duplicate = Status.query.filter(Status.name == name, Status.id != status.id).first()
+        if duplicate:
+            flash("Статус с таким названием уже существует", "danger")
             return redirect(url_for("statuses"))
 
         try:
@@ -1536,6 +1707,7 @@ def create_app() -> Flask:
 
         status.name = name
         status.sort_order = sort_order
+        status.is_final = bool(request.form.get("is_final"))
         db.session.commit()
 
         flash("Статус обновлён", "success")
@@ -1546,19 +1718,116 @@ def create_app() -> Flask:
     def status_delete(status_id: int):
         status = Status.query.get_or_404(status_id)
 
-        if Status.query.count() <= 1:
-            flash("Нельзя удалить последний статус", "danger")
+        if status.tasks.count() > 0:
+            flash("Нельзя удалить статус: есть связанные задачи", "danger")
             return redirect(url_for("statuses"))
 
-        if status.tasks.count() > 0:
-            flash("Статус нельзя удалить: есть задачи с этим статусом", "danger")
+        if Status.query.count() <= 1:
+            flash("В системе должен оставаться минимум один статус", "danger")
             return redirect(url_for("statuses"))
 
         db.session.delete(status)
         db.session.commit()
-
         flash("Статус удалён", "success")
         return redirect(url_for("statuses"))
+
+    @app.route("/reports", methods=["GET", "POST"])
+    @roles_required(Roles.ADMIN)
+    def reports():
+        source = request.form if request.method == "POST" else request.args
+        start_date, end_date, form_data = _build_report_period(source)
+        report = _collect_report_data(start_date, end_date)
+
+        if request.method == "POST":
+            return redirect(
+                url_for(
+                    "reports",
+                    days=form_data["days"],
+                    start_date=form_data["start_date"],
+                    end_date=form_data["end_date"],
+                )
+            )
+
+        return render_template(
+            "reports.html",
+            report=report,
+            form_data=form_data,
+        )
+
+    @app.route("/reports/export.csv")
+    @roles_required(Roles.ADMIN)
+    def reports_export_csv():
+        start_date, end_date, form_data = _build_report_period(request.args)
+        report = _collect_report_data(start_date, end_date)
+
+        output = StringIO()
+        writer = csv.writer(output)
+
+        writer.writerow(["Report", "Tasks by status"])
+        writer.writerow(["Period start", report["start_date"].isoformat()])
+        writer.writerow(["Period end", report["end_date"].isoformat()])
+        writer.writerow([])
+        writer.writerow(["Metric", "Value"])
+        writer.writerow(["Total created", report["total"]])
+        writer.writerow(["Completed", report["completed"]])
+        writer.writerow(["Not completed", report["not_completed"]])
+        writer.writerow([])
+        writer.writerow(["Status", "Count", "Final"])
+
+        for item in report["details"]:
+            status = item["status"]
+            writer.writerow([status.name, item["count"], "yes" if status.is_final else "no"])
+
+        csv_data = output.getvalue()
+        output.close()
+
+        filename = f"report_tasks_{report['start_date'].isoformat()}_{report['end_date'].isoformat()}.csv"
+        return Response(
+            csv_data,
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    @app.route("/settings/system", methods=["GET", "POST"])
+    @roles_required(Roles.ADMIN)
+    def system_settings():
+        if request.method == "POST":
+            if request.form.get("reset_defaults"):
+                reset_settings_to_defaults()
+                db.session.commit()
+                flash("Настройки сброшены к значениям по умолчанию", "success")
+                return redirect(url_for("system_settings"))
+
+            try:
+                cleaned = Validators.settings_payload(request.form)
+            except ValidationError as exc:
+                flash(str(exc), "danger")
+                return render_template("system_settings.html", form_data=request.form)
+
+            for key, value in cleaned.items():
+                set_setting(key, value)
+
+            logo_file = request.files.get("logo")
+            favicon_file = request.files.get("favicon")
+
+            try:
+                if logo_file and logo_file.filename:
+                    logo_path = _save_uploaded_file(logo_file, "logo", {".png", ".jpg", ".jpeg", ".svg", ".webp"})
+                    set_setting("logo_path", logo_path)
+
+                if favicon_file and favicon_file.filename:
+                    favicon_path = _save_uploaded_file(favicon_file, "favicon", {".ico", ".png", ".svg"})
+                    set_setting("favicon_path", favicon_path)
+            except ValidationError as exc:
+                flash(str(exc), "danger")
+                db.session.rollback()
+                return redirect(url_for("system_settings"))
+
+            db.session.commit()
+            flash("Системные настройки сохранены", "success")
+            return redirect(url_for("system_settings"))
+
+        return render_template("system_settings.html", form_data=get_all_settings())
 
     @app.errorhandler(400)
     def bad_request(_error):
@@ -1579,4 +1848,4 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

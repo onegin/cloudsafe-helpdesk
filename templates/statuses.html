@@ -15,6 +15,10 @@
                         <label class="form-label">Порядок сортировки</label>
                         <input class="form-control" name="sort_order" type="number" placeholder="Например, 40">
                     </div>
+                    <div class="col-12 form-check">
+                        <input class="form-check-input" type="checkbox" id="new-is-final" name="is_final">
+                        <label class="form-check-label" for="new-is-final">Считать выполненным</label>
+                    </div>
                     <div class="col-12">
                         <button class="btn btn-primary" type="submit">Создать</button>
                     </div>
@@ -32,6 +36,7 @@
                             <th>ID</th>
                             <th>Название</th>
                             <th>Порядок</th>
+                            <th>Финальный</th>
                             <th>Задач</th>
                             <th></th>
                         </tr>
@@ -46,6 +51,9 @@
                             <td>
                                 <input class="form-control form-control-sm" name="sort_order" type="number" value="{{ status.sort_order }}" form="update-status-{{ status.id }}" required>
                             </td>
+                            <td>
+                                <input class="form-check-input" type="checkbox" name="is_final" value="1" {% if status.is_final %}checked{% endif %} form="update-status-{{ status.id }}">
+                            </td>
                             <td>{{ status.tasks.count() }}</td>
                             <td class="text-nowrap">
                                 <form id="update-status-{{ status.id }}" method="post" action="{{ url_for('status_update', status_id=status.id) }}"></form>
@@ -57,7 +65,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="5" class="text-center text-muted py-4">Статусов пока нет</td>
+                            <td colspan="6" class="text-center text-muted py-4">Статусов пока нет</td>
                         </tr>
                         {% endfor %}
                     </tbody>

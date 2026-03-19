@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Отчеты{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Отчеты</h1>
+    <a class="btn btn-outline-secondary" href="{{ url_for('reports_export_csv', days=form_data.days, start_date=form_data.start_date, end_date=form_data.end_date) }}">Скачать CSV</a>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <form class="row g-3" method="post" action="{{ url_for('reports') }}">
+            <div class="col-md-3">
+                <label class="form-label">Период (дней)</label>
+                <input class="form-control" type="number" min="1" name="days" value="{{ form_data.days }}" placeholder="например, 30">
+                <div class="form-text">Если заполнено, даты ниже игнорируются.</div>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Дата начала</label>
+                <input class="form-control" type="date" name="start_date" value="{{ form_data.start_date }}">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Дата окончания</label>
+                <input class="form-control" type="date" name="end_date" value="{{ form_data.end_date }}">
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <button class="btn btn-primary w-100" type="submit">Сформировать</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-md-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="text-muted small">Создано задач</div>
+                <div class="display-6">{{ report.total }}</div>
+                <div class="small text-muted">Период: {{ report.start_date }} — {{ report.end_date }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="text-muted small">Выполнено</div>
+                <div class="display-6 text-success">{{ report.completed }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="text-muted small">Не выполнено</div>
+                <div class="display-6 text-danger">{{ report.not_completed }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-7">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5">Детализация по статусам</h2>
+                <div class="table-responsive">
+                    <table class="table align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Статус</th>
+                                <th>Кол-во</th>
+                                <th>Финальный</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in report.details %}
+                            <tr>
+                                <td>{{ item.status.name }}</td>
+                                <td>{{ item.count }}</td>
+                                <td>{% if item.status.is_final %}Да{% else %}Нет{% endif %}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="3" class="text-center text-muted">Нет данных</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5">График</h2>
+                <canvas id="statusChart" height="220"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+(() => {
+    const ctx = document.getElementById('statusChart');
+    if (!ctx) return;
+
+    const labels = {{ report.chart_labels | tojson }};
+    const values = {{ report.chart_values | tojson }};
+
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Количество задач',
+                data: values,
+                borderWidth: 1,
+                backgroundColor: 'rgba(13, 110, 253, 0.6)',
+                borderColor: 'rgba(13, 110, 253, 1)'
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        precision: 0
+                    }
+                }
+            }
+        }
+    });
+})();
+</script>
+{% endblock %}

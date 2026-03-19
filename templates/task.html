@@ -45,10 +45,10 @@
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Сотрудник (опционально)</label>
-                        <select class="form-select" id="client_id" name="client_id" data-selected="{{ task.client_id or '' }}">
-                            <option value="">Все сотрудники</option>
-                            {% for client in clients %}
-                            <option value="{{ client.id }}" {% if task.client_id == client.id %}selected{% endif %}>{{ client.username }}</option>
+                        <select class="form-select" id="employee_id" name="employee_id" data-selected="{{ task.employee_id or '' }}">
+                            <option value="">Общая задача организации</option>
+                            {% for employee in employees %}
+                            <option value="{{ employee.id }}" {% if task.employee_id == employee.id %}selected{% endif %}>{{ employee.full_name }}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -128,68 +128,73 @@
             </div>
         </div>
 
-        <div class="card shadow-sm mb-3">
-            <div class="card-body">
-                <h2 class="h5 mb-3">История изменений</h2>
-                <div class="table-responsive">
-                    <table class="table table-sm align-middle">
-                        <thead>
-                            <tr>
-                                <th>Когда</th>
-                                <th>Кто</th>
-                                <th>Поле</th>
-                                <th>Было</th>
-                                <th>Стало</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in task.change_history %}
-                            <tr>
-                                <td>{{ item.changed_at | datetime }}</td>
-                                <td>{{ item.changed_by.username if item.changed_by else 'System' }}</td>
-                                <td>{{ item.field_name }}</td>
-                                <td>{{ item.old_value if item.old_value else '—' }}</td>
-                                <td>{{ item.new_value if item.new_value else '—' }}</td>
-                            </tr>
-                            {% else %}
-                            <tr>
-                                <td colspan="5" class="text-center text-muted">История пока пустая</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
+        <div class="accordion" id="historyAccordion">
+            <div class="accordion-item">
+                <h2 class="accordion-header" id="historyHeading">
+                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#historyCollapse" aria-expanded="false" aria-controls="historyCollapse">
+                        История изменений
+                    </button>
+                </h2>
+                <div id="historyCollapse" class="accordion-collapse collapse" aria-labelledby="historyHeading" data-bs-parent="#historyAccordion">
+                    <div class="accordion-body">
+                        <h3 class="h6">Изменения полей</h3>
+                        <div class="table-responsive mb-3">
+                            <table class="table table-sm align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>Когда</th>
+                                        <th>Кто</th>
+                                        <th>Поле</th>
+                                        <th>Было</th>
+                                        <th>Стало</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for item in task.change_history %}
+                                    <tr>
+                                        <td>{{ item.changed_at | datetime }}</td>
+                                        <td>{{ item.changed_by.username if item.changed_by else 'System' }}</td>
+                                        <td>{{ item.field_name }}</td>
+                                        <td>{{ item.old_value if item.old_value else '—' }}</td>
+                                        <td>{{ item.new_value if item.new_value else '—' }}</td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="5" class="text-center text-muted">История пока пустая</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
 
-        <div class="card shadow-sm">
-            <div class="card-body">
-                <h2 class="h5 mb-3">История статусов</h2>
-                <div class="table-responsive">
-                    <table class="table table-sm align-middle">
-                        <thead>
-                            <tr>
-                                <th>Когда</th>
-                                <th>Кто</th>
-                                <th>Было</th>
-                                <th>Стало</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in task.history %}
-                            <tr>
-                                <td>{{ item.changed_at | datetime }}</td>
-                                <td>{{ item.changed_by.username if item.changed_by else 'API/System' }}</td>
-                                <td>{{ item.old_status.name if item.old_status else '—' }}</td>
-                                <td>{{ item.new_status.name }}</td>
-                            </tr>
-                            {% else %}
-                            <tr>
-                                <td colspan="4" class="text-center text-muted">История статусов пока пустая</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+                        <h3 class="h6">История статусов</h3>
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Когда</th>
+                                        <th>Кто</th>
+                                        <th>Было</th>
+                                        <th>Стало</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for item in task.history %}
+                                    <tr>
+                                        <td>{{ item.changed_at | datetime }}</td>
+                                        <td>{{ item.changed_by.username if item.changed_by else 'API/System' }}</td>
+                                        <td>{{ item.old_status.name if item.old_status else '—' }}</td>
+                                        <td>{{ item.new_status.name }}</td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="4" class="text-center text-muted">История статусов пока пустая</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -239,15 +244,15 @@
 <script>
 (() => {
     const orgSelect = document.getElementById('organization_id');
-    const clientSelect = document.getElementById('client_id');
+    const employeeSelect = document.getElementById('employee_id');
     const assigneeSelect = document.getElementById('assigned_to_id');
 
-    if (orgSelect === null || clientSelect === null) return;
+    if (orgSelect === null || employeeSelect === null) return;
 
-    const clientsByOrg = {{ clients_by_org | tojson }};
+    const employeesByOrg = {{ employees_by_org | tojson }};
     const assigneesByOrg = {{ assignees_by_org | tojson }};
 
-    const selectedClient = String(clientSelect.dataset.selected || '');
+    const selectedEmployee = String(employeeSelect.dataset.selected || '');
     const selectedAssignee = assigneeSelect ? String(assigneeSelect.dataset.selected || '') : '';
 
     function refill(selectEl, items, selectedValue, emptyLabel) {
@@ -262,7 +267,7 @@
         items.forEach((item) => {
             const option = document.createElement('option');
             option.value = String(item.id);
-            option.textContent = item.username;
+            option.textContent = item.name;
             selectEl.appendChild(option);
         });
 
@@ -272,8 +277,8 @@
 
     function refreshByOrganization() {
         const orgId = String(orgSelect.value || '');
-        const clientItems = clientsByOrg[orgId] || [];
-        refill(clientSelect, clientItems, selectedClient, 'Все сотрудники');
+        const employeeItems = employeesByOrg[orgId] || [];
+        refill(employeeSelect, employeeItems, selectedEmployee, 'Общая задача организации');
 
         if (assigneeSelect) {
             const assigneeItems = assigneesByOrg[orgId] || [];

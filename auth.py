@@ -3,7 +3,7 @@ from urllib.parse import urlparse
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 
-from models import User, db
+from models import Roles, User, db
 
 
 auth_bp = Blueprint("auth", __name__)
@@ -30,7 +30,7 @@ def login():
         password = request.form.get("password") or ""
 
         user = User.query.filter_by(username=username).first()
-        if user and user.active and user.check_password(password):
+        if user and user.active and user.role in Roles.INTERNAL and user.check_password(password):
             login_user(user)
             if user.must_change_password:
                 flash("Вы вошли с временным паролем. Смените пароль.", "warning")

@@ -8,8 +8,6 @@ from email.message import EmailMessage
 
 from flask import current_app
 
-from models import User
-
 
 def send_telegram_message(chat_id: str, text: str) -> bool:
     """Send a Telegram message via Bot API."""
@@ -75,19 +73,49 @@ def send_email_message(to_email: str, subject: str, body: str) -> bool:
         return False
 
 
-def notify_user(user: User, subject: str, body: str) -> str | None:
-    """Notify user, preferring Telegram over Email."""
-    if not user or not user.active:
-        return None
-
-    if user.telegram_chat_id:
-        if send_telegram_message(user.telegram_chat_id, body):
+def notify_contact(
+    *,
+    email: str | None,
+    telegram: str | None,
+    subject: str,
+    body: str,
+) -> str | None:
+    """Notify recipient using Telegram first, then Email."""
+    if telegram:
+        if send_telegram_message(telegram, body):
             return "telegram"
 
-    if user.email:
+    if email:
         plain_body = body.replace("<b>", "").replace("</b>", "")
-        if send_email_message(user.email, subject, plain_body):
+        if send_email_message(email, subject, plain_body):
             return "email"
 
-    current_app.logger.info("No available notification channel for user_id=%s", user.id)
     return None
+
+
+def notify_user(user, subject: str, body: str) -> str | None:
+    """Notify user-like object with fields: active, email, telegram_chat_id."""
+    if not user:
+        return None
+    if hasattr(user, "active") and not getattr(user, "active"):
+        return None
+    return notify_contact(
+        email=getattr(user, "email", None),
+        telegram=getattr(user, "telegram_chat_id", None),
+        subject=subject,
+        body=body,
+    )
+
+
+def notify_employee(employee, subject: str, body: str) -> str | None:
+    """Notify employee-like object with fields: is_active, email, telegram."""
+    if not employee:
+        return None
+    if hasattr(employee, "is_active") and not getattr(employee, "is_active"):
+        return None
+    return notify_contact(
+        email=getattr(employee, "email", None),
+        telegram=getattr(employee, "telegram", None),
+        subject=subject,
+        body=body,
+    )

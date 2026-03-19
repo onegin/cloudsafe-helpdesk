@@ -17,16 +17,6 @@
                         <textarea class="form-control" rows="6" name="content" required>{{ form_data.get('content', '') }}</textarea>
                     </div>
 
-                    {% if current_user.role == Roles.CLIENT %}
-                    <div class="col-md-6">
-                        <label class="form-label">Организация</label>
-                        <input class="form-control" value="{{ current_user.organization.name if current_user.organization else '—' }}" disabled>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">Сотрудник</label>
-                        <input class="form-control" value="{{ current_user.username }}" disabled>
-                    </div>
-                    {% else %}
                     <div class="col-md-6">
                         <label class="form-label">Организация</label>
                         <select class="form-select" id="organization_id" name="organization_id" required>
@@ -39,14 +29,13 @@
 
                     <div class="col-md-6">
                         <label class="form-label">Сотрудник (опционально)</label>
-                        <select class="form-select" id="client_id" name="client_id" data-selected="{{ form_data.get('client_id', '') }}">
-                            <option value="">Все сотрудники</option>
-                            {% for client in clients %}
-                            <option value="{{ client.id }}" {% if form_data.get('client_id')|int == client.id %}selected{% endif %}>{{ client.username }}</option>
+                        <select class="form-select" id="employee_id" name="employee_id" data-selected="{{ form_data.get('employee_id', '') }}">
+                            <option value="">Общая задача организации</option>
+                            {% for employee in employees %}
+                            <option value="{{ employee.id }}" {% if form_data.get('employee_id')|int == employee.id %}selected{% endif %}>{{ employee.full_name }}</option>
                             {% endfor %}
                         </select>
                     </div>
-                    {% endif %}
 
                     <div class="col-md-6">
                         <label class="form-label">Срок выполнения</label>
@@ -62,7 +51,6 @@
                         </select>
                     </div>
 
-                    {% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
                     <div class="col-md-6">
                         <label class="form-label">Ответственный оператор</label>
                         <select class="form-select" id="assigned_to_id" name="assigned_to_id" data-selected="{{ form_data.get('assigned_to_id', '') }}">
@@ -73,12 +61,11 @@
                         </select>
                         <div class="form-text">Список операторов зависит от выбранной организации.</div>
                     </div>
-                    {% endif %}
 
                     <div class="col-12 d-flex flex-wrap gap-3">
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" name="notify_client" id="notify_client" {% if form_data.get('notify_client', 'on') %}checked{% endif %}>
-                            <label class="form-check-label" for="notify_client">Уведомить клиента</label>
+                            <input class="form-check-input" type="checkbox" name="notify_target" id="notify_target" {% if form_data.get('notify_target', 'on') %}checked{% endif %}>
+                            <label class="form-check-label" for="notify_target">Уведомить сотрудника/организацию</label>
                         </div>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" name="notify_admins" id="notify_admins" {% if form_data.get('notify_admins', 'on') %}checked{% endif %}>
@@ -99,19 +86,18 @@
 
 {% block scripts %}
 {{ super() }}
-{% if current_user.role in (Roles.ADMIN, Roles.OPERATOR) %}
 <script>
 (() => {
     const orgSelect = document.getElementById('organization_id');
-    const clientSelect = document.getElementById('client_id');
+    const employeeSelect = document.getElementById('employee_id');
     const assigneeSelect = document.getElementById('assigned_to_id');
 
-    if (orgSelect === null || clientSelect === null) return;
+    if (orgSelect === null || employeeSelect === null) return;
 
-    const clientsByOrg = {{ clients_by_org | tojson }};
+    const employeesByOrg = {{ employees_by_org | tojson }};
     const assigneesByOrg = {{ assignees_by_org | tojson }};
 
-    const selectedClient = String(clientSelect.dataset.selected || '');
+    const selectedEmployee = String(employeeSelect.dataset.selected || '');
     const selectedAssignee = assigneeSelect ? String(assigneeSelect.dataset.selected || '') : '';
 
     function refill(selectEl, items, selectedValue, emptyLabel) {
@@ -126,7 +112,7 @@
         items.forEach((item) => {
             const option = document.createElement('option');
             option.value = String(item.id);
-            option.textContent = item.username;
+            option.textContent = item.name;
             selectEl.appendChild(option);
         });
 
@@ -136,8 +122,8 @@
 
     function refreshByOrganization() {
         const orgId = String(orgSelect.value || '');
-        const clientItems = clientsByOrg[orgId] || [];
-        refill(clientSelect, clientItems, selectedClient, 'Все сотрудники');
+        const employeeItems = employeesByOrg[orgId] || [];
+        refill(employeeSelect, employeeItems, selectedEmployee, 'Общая задача организации');
 
         if (assigneeSelect) {
             const assigneeItems = assigneesByOrg[orgId] || [];
@@ -149,5 +135,4 @@
     refreshByOrganization();
 })();
 </script>
-{% endif %}
 {% endblock %}

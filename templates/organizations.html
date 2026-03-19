@@ -4,8 +4,9 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="h3 mb-0">Организации</h1>
     <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary" href="{{ url_for('users') }}">К пользователям</a>
+        {% if current_user.role == Roles.ADMIN %}
         <a class="btn btn-primary" href="{{ url_for('organization_create') }}">Создать организацию</a>
+        {% endif %}
     </div>
 </div>
 
@@ -16,9 +17,10 @@
                 <tr>
                     <th>ID</th>
                     <th>Название</th>
-                    <th>Описание</th>
+                    <th>Контакты</th>
                     <th>Сотрудников</th>
                     <th>Задач</th>
+                    <th>API токен</th>
                     <th>Создана</th>
                     <th></th>
                 </tr>
@@ -27,21 +29,38 @@
                 {% for organization in organizations %}
                 <tr>
                     <td>{{ organization.id }}</td>
-                    <td><strong>{{ organization.name }}</strong></td>
-                    <td>{{ organization.description or '—' }}</td>
-                    <td>{{ organization.users.count() }}</td>
+                    <td>
+                        <strong>{{ organization.name }}</strong>
+                        <div class="small text-muted">{{ organization.description or '—' }}</div>
+                    </td>
+                    <td>
+                        <div class="small">{{ organization.email or '—' }}</div>
+                        <div class="small text-muted">{{ organization.phone or '—' }}</div>
+                    </td>
+                    <td>{{ organization.employees.count() }}</td>
                     <td>{{ organization.tasks.count() }}</td>
+                    <td>
+                        {% if organization.api_token_prefix %}
+                        <span class="badge text-bg-secondary">{{ organization.api_token_prefix }}…</span>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
                     <td>{{ organization.created_at | datetime }}</td>
                     <td class="text-nowrap">
-                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('organization_edit', organization_id=organization.id) }}">Редактировать</a>
+                        {% if current_user.role == Roles.ADMIN %}
+                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('organization_edit', organization_id=organization.id) }}">Открыть</a>
                         <form class="d-inline" method="post" action="{{ url_for('organization_delete', organization_id=organization.id) }}" onsubmit="return confirm('Удалить организацию?');">
                             <button class="btn btn-sm btn-outline-danger" type="submit">Удалить</button>
                         </form>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
                     </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="text-center text-muted py-4">Организации пока не созданы</td>
+                    <td colspan="8" class="text-center text-muted py-4">Организации пока не созданы</td>
                 </tr>
                 {% endfor %}
             </tbody>

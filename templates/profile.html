@@ -16,10 +16,6 @@
                         <input class="form-control" value="{{ current_user.role }}" disabled>
                     </div>
                     <div class="col-12">
-                        <label class="form-label">Организация</label>
-                        <input class="form-control" value="{{ current_user.organization.name if current_user.organization else '—' }}" disabled>
-                    </div>
-                    <div class="col-12">
                         <label class="form-label">Email</label>
                         <input class="form-control" type="email" name="email" required value="{{ form_data.get('email', '') }}">
                     </div>
