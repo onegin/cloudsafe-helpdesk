@@ -1,0 +1,27 @@
+version: '3.9'
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-changeme}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///ticket_system.db}
+      - ADMIN_LOGIN=${ADMIN_LOGIN:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - CSRF_ENABLED=${CSRF_ENABLED:-true}
+    volumes:
+      - .:/app
+      # Если будете использовать SQLite, том не обязателен, но полезен для постоянства данных
+      # - ./data:/app
+
+  nginx:
+    image: nginx:stable-alpine
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./static:/app/static:ro
+    restart: always
