@@ -44,9 +44,9 @@
 
                     <div class="col-md-6">
                         <label class="form-label">Приоритет</label>
-                        <select class="form-select" name="priority">
+                        <select class="form-select" name="priority_id">
                             {% for value, label in priorities %}
-                            <option value="{{ value }}" {% if form_data.get('priority', 'medium') == value %}selected{% endif %}>{{ label }}</option>
+                            <option value="{{ value }}" {% if (form_data.get('priority_id') or form_data.get('priority', '')) == value %}selected{% endif %}>{{ label }}</option>
                             {% endfor %}
                         </select>
                     </div>
