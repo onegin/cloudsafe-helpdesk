@@ -7,20 +7,26 @@
 
 <div class="card shadow-sm">
     <div class="card-body">
-        <p class="text-muted">В текущей версии приоритеты фиксированы в системе.</p>
+        <p class="text-muted">Приоритеты хранятся в базе данных и задаются справочником.</p>
         <div class="table-responsive">
             <table class="table align-middle mb-0">
                 <thead>
                     <tr>
-                        <th>Код</th>
+                        <th>ID</th>
                         <th>Название</th>
+                        <th>Цвет</th>
+                        <th>По умолчанию</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for value, label in priorities %}
+                    {% for priority in priorities %}
                     <tr>
-                        <td><code>{{ value }}</code></td>
-                        <td>{{ label }}</td>
+                        <td><code>{{ priority.id }}</code></td>
+                        <td>{{ priority.name }}</td>
+                        <td>
+                            <span class="badge" style="background-color: {{ priority.color }};">{{ priority.color }}</span>
+                        </td>
+                        <td>{% if priority.is_default %}Да{% else %}—{% endif %}</td>
                     </tr>
                     {% endfor %}
                 </tbody>

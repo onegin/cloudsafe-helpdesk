@@ -40,11 +40,11 @@ class Validators:
         return email
 
     @staticmethod
-    def parse_priority(value: str | None) -> str:
-        priority = (value or Priority.MEDIUM).strip().lower()
-        if priority not in Priority.ALL:
+    def parse_priority_id(value) -> int:
+        priority_id = Validators.parse_required_int(value, "priority_id")
+        if not Priority.query.filter_by(id=priority_id).first():
             raise ValidationError("Некорректный приоритет")
-        return priority
+        return priority_id
 
     @staticmethod
     def parse_optional_int(value, field_name: str) -> int | None:
@@ -91,7 +91,7 @@ class Validators:
             raise ValidationError("Поле 'Срок выполнения' обязательно")
 
         due_date = Validators.parse_due_date(due_date_raw)
-        priority = Validators.parse_priority(data.get("priority"))
+        priority_id = Validators.parse_priority_id(data.get("priority_id") or data.get("priority"))
         organization_id = Validators.parse_optional_int(data.get("organization_id"), "organization_id")
 
         if require_organization and not organization_id:
@@ -101,7 +101,7 @@ class Validators:
             "theme": theme,
             "content": content,
             "due_date": due_date,
-            "priority": priority,
+            "priority_id": priority_id,
             "organization_id": organization_id,
             "employee_id": Validators.parse_optional_int(data.get("employee_id"), "employee_id"),
             "assigned_to_id": Validators.parse_optional_int(data.get("assigned_to_id"), "assigned_to_id"),

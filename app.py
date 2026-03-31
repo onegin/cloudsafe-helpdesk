@@ -33,6 +33,7 @@ from models import (
     Employee,
     OperatorOrganizationAccess,
     Organization,
+    Priority,
     Roles,
     Setting,
     Status,
@@ -117,6 +118,10 @@ def _first_status() -> Status | None:
     return Status.query.order_by(Status.sort_order.asc(), Status.id.asc()).first()
 
 
+def _default_priority() -> Priority | None:
+    return Priority.query.order_by(Priority.is_default.desc(), Priority.sort_order.asc(), Priority.id.asc()).first()
+
+
 def _generate_unique_org_name(base_name: str, existing_names: set[str]) -> str:
     name = base_name
     suffix = 2
@@ -171,7 +176,7 @@ def _run_simple_schema_migrations(app: Flask) -> None:
 
     # Tasks
     if "tasks" in table_names:
-        _add_column_if_missing("tasks", "priority", "priority VARCHAR(20) DEFAULT 'medium'")
+        _add_column_if_missing("tasks", "priority_id", "priority_id INTEGER")
         _add_column_if_missing("tasks", "organization_id", "organization_id INTEGER")
         _add_column_if_missing("tasks", "employee_id", "employee_id INTEGER")
         _add_column_if_missing("tasks", "assigned_to_id", "assigned_to_id INTEGER")
@@ -405,6 +410,17 @@ def bootstrap_defaults(app: Flask) -> None:
         for name, sort_order, is_final in defaults:
             db.session.add(Status(name=name, sort_order=sort_order, is_final=is_final))
 
+    if Priority.query.count() == 0:
+        defaults = [
+            ("Низкий", "#198754", 10, False),
+            ("Средний", "#0d6efd", 20, True),
+            ("Высокий", "#dc3545", 30, False),
+        ]
+        for name, color, sort_order, is_default in defaults:
+            db.session.add(
+                Priority(name=name, color=color, sort_order=sort_order, is_default=is_default)
+            )
+
     admin_user = User.query.filter_by(role=Roles.ADMIN).first()
     if not admin_user:
         admin_user = User(
@@ -491,9 +507,9 @@ def _apply_task_filters(base_query):
     if status_id:
         query = query.filter(Task.status_id == status_id)
 
-    priority = (request.args.get("priority") or "").strip().lower()
-    if priority:
-        query = query.filter(Task.priority == priority)
+    priority_id = request.args.get("priority", type=int)
+    if priority_id:
+        query = query.filter(Task.priority_id == priority_id)
 
     due_date_raw = (request.args.get("due_date") or "").strip()
     if due_date_raw:
@@ -512,7 +528,7 @@ def _apply_task_filters(base_query):
         "organization_id": organization_id,
         "employee_id": employee_id,
         "status_id": status_id,
-        "priority": priority,
+        "priority": str(priority_id) if priority_id else "",
         "due_date": due_date_raw,
         "q": q,
     }
@@ -810,7 +826,7 @@ def create_app() -> Flask:
                 theme=cleaned["theme"],
                 content=cleaned["content"],
                 due_date=cleaned["due_date"],
-                priority=cleaned["priority"],
+                priority_id=cleaned["priority_id"],
                 organization=organization,
                 employee=employee,
                 status=initial_status,
@@ -868,7 +884,7 @@ def create_app() -> Flask:
             "theme": "",
             "content": "",
             "due_date": "",
-            "priority": "medium",
+            "priority_id": str(_default_priority().id) if _default_priority() else "",
             "notify_target": "on",
             "notify_admins": "on",
             "organization_id": str(collections["selected_org_id"] or ""),
@@ -986,7 +1002,7 @@ def create_app() -> Flask:
         task.theme = cleaned["theme"]
         task.content = cleaned["content"]
         task.due_date = cleaned["due_date"]
-        task.priority = cleaned["priority"]
+        task.priority_id = cleaned["priority_id"]
         task.organization = organization
         task.employee = employee
         task.assigned_to = assignee
@@ -1647,7 +1663,8 @@ def create_app() -> Flask:
     @app.route("/priorities")
     @roles_required(Roles.ADMIN, Roles.OPERATOR)
     def priorities():
-        return render_template("priorities.html", priorities=priority_choices())
+        rows = Priority.query.order_by(Priority.sort_order.asc(), Priority.id.asc()).all()
+        return render_template("priorities.html", priorities=rows)
 
     @app.route("/statuses/create", methods=["POST"])
     @roles_required(Roles.ADMIN)

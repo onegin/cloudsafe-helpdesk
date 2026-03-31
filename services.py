@@ -41,7 +41,8 @@ class Recipient:
 
 
 def priority_choices() -> list[tuple[str, str]]:
-    return [(value, Priority.LABELS[value]) for value in Priority.ALL]
+    priorities = Priority.query.order_by(Priority.sort_order.asc(), Priority.id.asc()).all()
+    return [(str(priority.id), priority.name) for priority in priorities]
 
 
 def get_setting(key: str, default: str | None = None) -> str | None:
