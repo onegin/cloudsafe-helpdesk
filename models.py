@@ -21,19 +21,6 @@ class Roles:
     INTERNAL = (ADMIN, OPERATOR)
 
 
-class Priority:
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-    ALL = (LOW, MEDIUM, HIGH)
-    LABELS = {
-        LOW: "Низкий",
-        MEDIUM: "Средний",
-        HIGH: "Высокий",
-    }
-
-
 class Organization(db.Model):
     __tablename__ = "organizations"
 
@@ -179,6 +166,13 @@ class User(UserMixin, db.Model):
         lazy="dynamic",
     )
 
+    uploaded_attachments = db.relationship(
+        "Attachment",
+        back_populates="uploaded_by",
+        foreign_keys="Attachment.uploaded_by_id",
+        lazy="dynamic",
+    )
+
     operator_org_access = db.relationship(
         "OperatorOrganizationAccess",
         back_populates="operator",
@@ -222,6 +216,25 @@ class OperatorOrganizationAccess(db.Model):
     )
 
 
+class Priority(db.Model):
+    __tablename__ = "priorities"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), unique=True, nullable=False)
+    color = db.Column(db.String(7), nullable=False, default="#28a745")
+    sort_order = db.Column("order", db.Integer, nullable=False, default=20, index=True)
+    is_default = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    tasks = db.relationship("Task", back_populates="priority", lazy="dynamic")
+
+
 class Status(db.Model):
     __tablename__ = "statuses"
 
@@ -242,10 +255,9 @@ class Task(db.Model):
     content = db.Column(db.Text, nullable=False)
     due_date = db.Column(db.Date, nullable=False, index=True)
 
-    priority = db.Column(db.String(20), nullable=False, default=Priority.MEDIUM, index=True)
-
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=False, index=True)
     employee_id = db.Column(db.Integer, db.ForeignKey("employees.id"), nullable=True, index=True)
+    priority_id = db.Column(db.Integer, db.ForeignKey("priorities.id"), nullable=False, index=True)
     status_id = db.Column(db.Integer, db.ForeignKey("statuses.id"), nullable=False, index=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     assigned_to_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
@@ -263,6 +275,7 @@ class Task(db.Model):
 
     organization = db.relationship("Organization", back_populates="tasks")
     employee = db.relationship("Employee", back_populates="tasks", foreign_keys=[employee_id])
+    priority = db.relationship("Priority", back_populates="tasks", foreign_keys=[priority_id])
     status = db.relationship("Status", back_populates="tasks")
     created_by = db.relationship("User", back_populates="created_tasks", foreign_keys=[created_by_id])
     assigned_to = db.relationship("User", back_populates="assigned_tasks", foreign_keys=[assigned_to_id])
@@ -285,17 +298,45 @@ class Task(db.Model):
         cascade="all, delete-orphan",
         order_by="TaskComment.created_at.asc()",
     )
+    attachments = db.relationship(
+        "Attachment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="Attachment.uploaded_at.desc()",
+    )
 
     def is_overdue(self) -> bool:
         return not self.archived and self.due_date < date.today()
 
     @property
     def priority_label(self) -> str:
-        return Priority.LABELS.get(self.priority, self.priority)
+        return self.priority.name if self.priority else "—"
+
+    @property
+    def priority_color(self) -> str:
+        return self.priority.color if self.priority else "#6c757d"
 
     @property
     def target_label(self) -> str:
         return self.employee.full_name if self.employee else "Общая задача организации"
+
+
+class Attachment(db.Model):
+    __tablename__ = "attachments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey("tasks.id"), nullable=False, index=True)
+    filename = db.Column(db.String(255), nullable=False)
+    filepath = db.Column(db.String(600), nullable=False)
+    filesize = db.Column(db.Integer, nullable=False)
+    mime_type = db.Column(db.String(120), nullable=True)
+    uploaded_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    deleted_at = db.Column(db.DateTime, nullable=True)
+
+    task = db.relationship("Task", back_populates="attachments")
+    uploaded_by = db.relationship("User", back_populates="uploaded_attachments", foreign_keys=[uploaded_by_id])
 
 
 class StatusHistory(db.Model):
@@ -405,13 +446,14 @@ class Setting(db.Model):
 __all__ = [
     "db",
     "Roles",
-    "Priority",
     "Organization",
     "Employee",
     "User",
     "OperatorOrganizationAccess",
+    "Priority",
     "Status",
     "Task",
+    "Attachment",
     "StatusHistory",
     "TaskHistory",
     "TaskComment",
